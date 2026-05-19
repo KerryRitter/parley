@@ -10,6 +10,32 @@ This package mirrors the Rust `agent-router` routing model for TypeScript CLIs. 
 npm install programmatic-agent-router-sdk
 ```
 
+## Local Registry Test
+
+Use Verdaccio before publishing to the public npm registry:
+
+```sh
+npm install --prefix /tmp/par-verdaccio verdaccio
+/tmp/par-verdaccio/node_modules/.bin/verdaccio --listen 127.0.0.1:4873
+```
+
+In another shell:
+
+```sh
+npm adduser --registry http://127.0.0.1:4873 --auth-type=legacy
+npm publish --registry http://127.0.0.1:4873 --access public
+```
+
+Then install into a fresh consumer project:
+
+```sh
+mkdir -p /tmp/par-sdk-consumer
+cd /tmp/par-sdk-consumer
+npm init -y
+npm install --registry http://127.0.0.1:4873 programmatic-agent-router-sdk
+node --input-type=module -e "import { buildInvocation } from 'programmatic-agent-router-sdk'; console.log(buildInvocation({ prompt: 'hello' }))"
+```
+
 ## Build an Invocation
 
 ```ts
