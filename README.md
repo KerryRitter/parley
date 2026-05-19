@@ -124,6 +124,12 @@ For a rustup-style install from GitHub:
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh
 ```
 
+For a private repository while authenticated with GitHub CLI:
+
+```sh
+gh api 'repos/KerryRitter/programmatic-agent-router/contents/install.sh?ref=main' --jq .content | base64 -d | sh -s -- --from-source --git-protocol ssh
+```
+
 The script tries to install a release binary for your platform first. Until release binaries exist, it falls back to:
 
 ```sh
