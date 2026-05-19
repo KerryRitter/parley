@@ -116,6 +116,29 @@ Make sure both Cargo's bin directory and `~/.local/bin` are on your `PATH`:
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
 ```
 
+### Install from GitHub
+
+For a rustup-style install from GitHub:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh
+```
+
+The script tries to install a release binary for your platform first. Until release binaries exist, it falls back to:
+
+```sh
+cargo install --git https://github.com/KerryRitter/programmatic-agent-router.git --branch main --force
+```
+
+Useful options:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --install-dir /usr/local/bin
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --from-source
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --from-source --git-protocol ssh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --no-par
+```
+
 ### Install from a Release Binary
 
 The intended public release flow is to publish platform archives from CI:
