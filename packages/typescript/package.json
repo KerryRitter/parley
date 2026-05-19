@@ -1,0 +1,57 @@
+{
+  "name": "programmatic-agent-router-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for routing programmatic prompts to local AI agent CLIs.",
+  "type": "module",
+  "license": "MIT",
+  "author": "KerryRitter <ritter@kerryritter.com>",
+  "homepage": "https://github.com/KerryRitter/programmatic-agent-router#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/KerryRitter/programmatic-agent-router.git",
+    "directory": "packages/typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/KerryRitter/programmatic-agent-router/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "claude",
+    "codex",
+    "cursor",
+    "gemini",
+    "goose",
+    "opencode",
+    "aider"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "build:test": "npm run clean && tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "prepack": "npm run build",
+    "test": "npm run build:test && node --test dist/**/*.test.js",
+    "validate": "npm run test && npm pack --dry-run --cache /tmp/npm-cache"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "typescript": "^5.8.3"
+  }
+}
