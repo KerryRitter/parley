@@ -6,7 +6,7 @@ description = "Rust CLI router for programmatic AI agent CLIs."
 license = "MIT"
 
 [[bin]]
-name = "agent-router"
+name = "par"
 path = "src/main.rs"
 
 [profile.release]

@@ -1,13 +1,13 @@
 # Programmatic Agent Router
 
-`agent-router` is a small Rust CLI that gives automation one stable prompt interface and routes the call to a local AI agent harness.
+`par` is a small Rust CLI that gives automation one stable prompt interface and routes the call to a local AI agent harness.
 
 It is designed around the useful `claude -p "prompt"` style of workflow:
 
 ```sh
-agent-router -p "review this repository" --harness codex --model gpt-5.4
-agent-router -p "fix the failing tests" --harness opencode --provider anthropic --model claude-sonnet-4-6
-git diff | agent-router -p "review this patch" --harness goose --provider openai --model gpt-5.4
+par -p "review this repository" --harness codex --model gpt-5.4
+par -p "fix the failing tests" --harness opencode --provider anthropic --model claude-sonnet-4-6
+git diff | par -p "review this patch" --harness goose --provider openai --model gpt-5.4
 ```
 
 The router does not call model APIs directly. It starts an already-installed harness CLI, maps shared router flags into that harness's command surface, streams stdout/stderr, and exits with the child process status.
@@ -25,10 +25,10 @@ Programmatic agent CLIs all solve a similar problem, but their headless interfac
 - Aider uses `aider --message`.
 - Antigravity uses the `agy` CLI surface.
 
-That makes scripts brittle. Switching harnesses means editing commands, model flags, provider syntax, JSON output flags, and environment variables. `agent-router` keeps scripts focused on intent:
+That makes scripts brittle. Switching harnesses means editing commands, model flags, provider syntax, JSON output flags, and environment variables. `par` keeps scripts focused on intent:
 
 ```sh
-agent-router --harness <name> --provider <provider> --model <model> -p "<task>"
+par --harness <name> --provider <provider> --model <model> -p "<task>"
 ```
 
 The harness adapter owns the translation.
@@ -62,7 +62,7 @@ Not implemented yet:
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh
 ```
 
-This installs `agent-router` into `~/.local/bin` and creates a `par` convenience alias.
+This installs `par` into `~/.local/bin` and creates an `agent-router` compatibility alias.
 
 ### Prerequisites
 
@@ -104,7 +104,7 @@ scripts/setup.sh --strict-harnesses
 
 ## Install Harness CLIs
 
-`agent-router` can install supported downstream harness CLIs:
+`par` can install supported downstream harness CLIs:
 
 ```sh
 par install list
@@ -115,6 +115,22 @@ par install --dry-run all
 ```
 
 The installer registry is intentionally transparent: `--dry-run` prints the exact upstream install command without executing it. For harnesses that do not expose a stable terminal one-liner, such as Amazon Q, `par install <name>` prints the official install page and verification command instead of guessing.
+
+Current installer coverage:
+
+| Harness | Installer |
+| --- | --- |
+| `claude` | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| `codex` | `npm install -g @openai/codex` |
+| `cursor` | `curl https://cursor.com/install -fsS \| bash` |
+| `gemini` | `npm install -g @google/gemini-cli` |
+| `goose` | `curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \| bash` |
+| `opencode` | `curl -fsSL https://opencode.ai/install \| bash` |
+| `qwen` | `curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh \| bash` |
+| `aider` | `curl -LsSf https://aider.chat/install.sh \| sh` |
+| `amazon-q` | Manual official installer page; verify with `q --version` |
+| `copilot` | `curl -fsSL https://gh.io/copilot-install \| bash` |
+| `antigravity` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
 
 ### Install from Source
 
@@ -131,7 +147,8 @@ cargo install --path . --force
 and creates:
 
 ```sh
-~/.local/bin/par -> agent-router
+~/.local/bin/par
+~/.local/bin/agent-router -> ~/.local/bin/par
 ```
 
 Make sure both Cargo's bin directory and `~/.local/bin` are on your `PATH`:
@@ -160,24 +177,24 @@ Useful options:
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --install-dir /usr/local/bin
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --from-source
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --from-source --git-protocol ssh
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --no-par
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --no-agent-router
 ```
 
 ### Install from a Release Binary
 
 The intended public release flow is to publish platform archives from CI:
 
-- `agent-router-aarch64-apple-darwin.tar.gz`
-- `agent-router-x86_64-apple-darwin.tar.gz`
-- `agent-router-x86_64-unknown-linux-gnu.tar.gz`
-- `agent-router-x86_64-pc-windows-msvc.zip`
+- `par-aarch64-apple-darwin.tar.gz`
+- `par-x86_64-apple-darwin.tar.gz`
+- `par-x86_64-unknown-linux-gnu.tar.gz`
+- `par-x86_64-pc-windows-msvc.zip`
 
 Then installation is:
 
 ```sh
-tar -xzf agent-router-x86_64-unknown-linux-gnu.tar.gz
-install -m 0755 agent-router ~/.local/bin/agent-router
-ln -sf ~/.local/bin/agent-router ~/.local/bin/par
+tar -xzf par-x86_64-unknown-linux-gnu.tar.gz
+install -m 0755 par ~/.local/bin/par
+ln -sf ~/.local/bin/par ~/.local/bin/agent-router
 ```
 
 ### Homebrew Later
@@ -186,17 +203,17 @@ A public distribution should add a tap:
 
 ```sh
 brew tap <org>/tap
-brew install agent-router
+brew install par
 ```
 
-That should install the same release binary and provide both `agent-router` and `par`.
+That should install the same release binary and provide `par` as the primary CLI name.
 
 ## Quick Start
 
 Default harness is `claude`:
 
 ```sh
-agent-router -p "summarize this repository"
+par -p "summarize this repository"
 ```
 
 Equivalent routed command:
@@ -208,13 +225,13 @@ claude -p "summarize this repository"
 Use Codex:
 
 ```sh
-agent-router --harness codex --model gpt-5.4 -p "add parser tests"
+par --harness codex --model gpt-5.4 -p "add parser tests"
 ```
 
 Use OpenCode with provider-qualified model routing:
 
 ```sh
-agent-router \
+par \
   --harness opencode \
   --provider anthropic \
   --model claude-sonnet-4-6 \
@@ -224,7 +241,7 @@ agent-router \
 Use Goose with environment-backed configuration:
 
 ```sh
-agent-router \
+par \
   --harness goose \
   --provider openai \
   --model gpt-5.4 \
@@ -236,26 +253,26 @@ agent-router \
 Pipe context:
 
 ```sh
-git diff | agent-router --harness aider -p "fix the problems in this patch"
+git diff | par --harness aider -p "fix the problems in this patch"
 ```
 
 Preview without execution:
 
 ```sh
-agent-router --harness qwen --model qwen3-coder-plus -p "review src" --dry-run
+par --harness qwen --model qwen3-coder-plus -p "review src" --dry-run
 ```
 
 Pass harness-specific flags after `--`:
 
 ```sh
-agent-router --harness claude -p "review this" -- --verbose
-agent-router --harness aider -p "fix lint" -- --yes --no-auto-commits
+par --harness claude -p "review this" -- --verbose
+par --harness aider -p "fix lint" -- --yes --no-auto-commits
 ```
 
 ## CLI Reference
 
 ```text
-agent-router [options] [-p <prompt>] [positional prompt]
+par [options] [-p <prompt>] [positional prompt]
 ```
 
 | Option | Purpose |
@@ -510,7 +527,7 @@ Recommended first public release checklist:
 
 ## Security and Privacy
 
-`agent-router` does not inspect or redact prompt content. Anything passed to stdin or `-p` is forwarded to the selected harness. The selected harness may send that content to its configured provider.
+`par` does not inspect or redact prompt content. Anything passed to stdin or `-p` is forwarded to the selected harness. The selected harness may send that content to its configured provider.
 
 The router also does not weaken or bypass harness sandboxing. Permission behavior is delegated to the downstream CLI. When a shared option like `--permission-mode` is mapped, it uses the target harness's documented control surface.
 
@@ -550,5 +567,7 @@ This README was written against public docs checked on May 19, 2026:
 - [Amazon Q Developer CLI reference](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-reference.html) documents `q chat --agent <name> "<prompt>"`.
 - [Goose headless docs](https://block.github.io/goose/docs/tutorials/headless-goose/) document `goose run -t`.
 - [Antigravity CLI docs](https://antigravity.google/docs/cli-using) document the `agy` CLI surface and configuration model.
+
+Installer commands are kept in `src/installer.rs` and checked against the official install docs where a stable one-liner exists. Amazon Q remains manual because the official AWS CLI docs point users through platform-specific installer flows rather than a single shell installer command.
 
 Re-check these command surfaces before a public release. Agent CLIs change fast.

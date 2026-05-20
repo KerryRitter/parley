@@ -121,11 +121,11 @@ where
 
 pub(crate) fn usage() -> &'static str {
     "Usage:
-  agent-router -p \"prompt\" --harness codex --model gpt-5.4
-  agent-router --harness opencode --provider anthropic --model claude-sonnet-4-6 \"fix the failing tests\"
-  cat README.md | agent-router -p \"summarize this\" --harness gemini --output-format json
-  agent-router install claude
-  agent-router install list
+  par -p \"prompt\" --harness codex --model gpt-5.4
+  par --harness opencode --provider anthropic --model claude-sonnet-4-6 \"fix the failing tests\"
+  cat README.md | par -p \"summarize this\" --harness gemini --output-format json
+  par install claude
+  par install list
 
 Options:
   --harness <name>        claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, antigravity

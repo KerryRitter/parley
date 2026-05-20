@@ -5,7 +5,7 @@ REPO="${PAR_REPO:-KerryRitter/programmatic-agent-router}"
 REF="${PAR_REF:-main}"
 INSTALL_DIR="${PAR_INSTALL_DIR:-$HOME/.local/bin}"
 GIT_PROTOCOL="${PAR_GIT_PROTOCOL:-https}"
-INSTALL_PAR=1
+INSTALL_LEGACY_ALIAS=1
 DRY_RUN=0
 FROM_SOURCE=0
 
@@ -13,7 +13,7 @@ usage() {
   cat <<'EOF'
 Usage: install.sh [options]
 
-Installs agent-router from GitHub.
+Installs par from GitHub.
 
 Options:
   --install-dir <dir>  Install directory (default: ~/.local/bin)
@@ -21,7 +21,7 @@ Options:
   --ref <ref>          Git ref for cargo source fallback (default: main)
   --git-protocol <p>   Git protocol for source fallback: https or ssh (default: https)
   --from-source        Skip release binaries and install with cargo from GitHub
-  --no-par             Do not create the par convenience symlink
+  --no-agent-router    Do not create the legacy agent-router symlink
   --dry-run            Print actions without installing
   -h, --help           Show this help
 
@@ -88,8 +88,8 @@ while [ "$#" -gt 0 ]; do
       FROM_SOURCE=1
       shift
       ;;
-    --no-par)
-      INSTALL_PAR=0
+    --no-agent-router|--no-par)
+      INSTALL_LEGACY_ALIAS=0
       shift
       ;;
     --dry-run)
@@ -154,11 +154,12 @@ download() {
   fail "curl or wget is required to download release binaries"
 }
 
-install_from_release() {
+install_release_archive() {
   target="$1"
   tmp_dir="$2"
-  archive="$tmp_dir/agent-router.tar.gz"
-  url="https://github.com/$REPO/releases/latest/download/agent-router-$target.tar.gz"
+  binary_name="$3"
+  archive="$tmp_dir/$binary_name.tar.gz"
+  url="https://github.com/$REPO/releases/latest/download/$binary_name-$target.tar.gz"
 
   info "trying release binary: $url"
 
@@ -168,11 +169,22 @@ install_from_release() {
   fi
 
   run tar -xzf "$archive" -C "$tmp_dir"
-  [ "$DRY_RUN" -eq 1 ] || [ -x "$tmp_dir/agent-router" ] || fail "release archive did not contain executable agent-router"
+  [ "$DRY_RUN" -eq 1 ] || [ -x "$tmp_dir/$binary_name" ] || fail "release archive did not contain executable $binary_name"
 
   run mkdir -p "$INSTALL_DIR"
-  run install -m 0755 "$tmp_dir/agent-router" "$INSTALL_DIR/agent-router"
+  run install -m 0755 "$tmp_dir/$binary_name" "$INSTALL_DIR/par"
   return 0
+}
+
+install_from_release() {
+  target="$1"
+  tmp_dir="$2"
+
+  if install_release_archive "$target" "$tmp_dir" par; then
+    return 0
+  fi
+
+  install_release_archive "$target" "$tmp_dir" agent-router
 }
 
 install_from_source() {
@@ -204,18 +216,24 @@ install_from_source() {
     CARGO_NET_GIT_FETCH_WITH_CLI=true cargo install --git "$repo_url" --branch "$REF" --force
   fi
 
-  installed="$(command -v agent-router || true)"
+  installed=""
+  if [ -z "$installed" ] && [ -x "$HOME/.cargo/bin/par" ]; then
+    installed="$HOME/.cargo/bin/par"
+  fi
+  if [ -z "$installed" ]; then
+    installed="$(command -v par || true)"
+  fi
   if [ -z "$installed" ] && [ -x "$HOME/.cargo/bin/agent-router" ]; then
     installed="$HOME/.cargo/bin/agent-router"
   fi
 
   if [ "$DRY_RUN" -eq 0 ]; then
-    [ -n "$installed" ] || fail "cargo install finished but agent-router was not found"
+    [ -n "$installed" ] || fail "cargo install finished but par was not found"
     run mkdir -p "$INSTALL_DIR"
-    run install -m 0755 "$installed" "$INSTALL_DIR/agent-router"
+    run install -m 0755 "$installed" "$INSTALL_DIR/par"
   else
     run mkdir -p "$INSTALL_DIR"
-    run install -m 0755 "\$HOME/.cargo/bin/agent-router" "$INSTALL_DIR/agent-router"
+    run install -m 0755 "\$HOME/.cargo/bin/par" "$INSTALL_DIR/par"
   fi
 }
 
@@ -240,14 +258,17 @@ else
   install_from_source
 fi
 
-if [ "$INSTALL_PAR" -eq 1 ]; then
+if [ "$INSTALL_LEGACY_ALIAS" -eq 1 ]; then
   run mkdir -p "$INSTALL_DIR"
-  run ln -sf "$INSTALL_DIR/agent-router" "$INSTALL_DIR/par"
+  run ln -sf "$INSTALL_DIR/par" "$INSTALL_DIR/agent-router"
+  if [ -d "$HOME/.cargo/bin" ] && [ -w "$HOME/.cargo/bin" ] && [ -x "$HOME/.cargo/bin/par" ]; then
+    run ln -sf "$HOME/.cargo/bin/par" "$HOME/.cargo/bin/agent-router"
+  fi
 fi
 
-info "installed agent-router to $INSTALL_DIR/agent-router"
-if [ "$INSTALL_PAR" -eq 1 ]; then
-  info "installed par alias to $INSTALL_DIR/par"
+info "installed par to $INSTALL_DIR/par"
+if [ "$INSTALL_LEGACY_ALIAS" -eq 1 ]; then
+  info "installed legacy agent-router alias to $INSTALL_DIR/agent-router"
 fi
 
 case ":$PATH:" in

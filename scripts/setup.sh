@@ -15,11 +15,11 @@ usage() {
   cat <<'EOF'
 Usage: scripts/setup.sh [options]
 
-Validates this machine for developing and running agent-router.
+Validates this machine for developing and running par.
 
 Options:
-  --install              Install agent-router with cargo install --path .
-  --install-dir <dir>    Directory for the optional par symlink (default: ~/.local/bin)
+  --install              Install par with cargo install --path .
+  --install-dir <dir>    Directory for the par binary and agent-router alias (default: ~/.local/bin)
   --strict-harnesses     Fail if none of the supported downstream harness CLIs are installed
   --no-clippy            Skip cargo clippy
   --no-fmt               Skip cargo fmt --check
@@ -189,17 +189,19 @@ if [ "$INSTALL" -eq 1 ]; then
   mkdir -p "$INSTALL_DIR" || fail "failed to create install dir: $INSTALL_DIR"
   [ -w "$INSTALL_DIR" ] || fail "install dir is not writable: $INSTALL_DIR"
 
-  agent_router_path="$(command -v agent-router || true)"
-  if [ -z "$agent_router_path" ]; then
-    if [ -x "${CARGO_HOME}/bin/agent-router" ]; then
-      agent_router_path="${CARGO_HOME}/bin/agent-router"
-    fi
+  par_path="$(command -v par || true)"
+  if [ -x "${CARGO_HOME}/bin/par" ]; then
+    par_path="${CARGO_HOME}/bin/par"
   fi
-  [ -n "$agent_router_path" ] || fail "cargo install completed, but agent-router could not be found"
+  [ -n "$par_path" ] || fail "cargo install completed, but par could not be found"
 
-  ln -sf "$agent_router_path" "$INSTALL_DIR/par" || fail "failed to create par symlink in $INSTALL_DIR"
-  info "installed: $agent_router_path"
-  info "linked: $INSTALL_DIR/par"
+  install -m 0755 "$par_path" "$INSTALL_DIR/par" || fail "failed to install par in $INSTALL_DIR"
+  ln -sf "$INSTALL_DIR/par" "$INSTALL_DIR/agent-router" || fail "failed to create agent-router alias in $INSTALL_DIR"
+  if [ -d "${CARGO_HOME}/bin" ] && [ -w "${CARGO_HOME}/bin" ]; then
+    ln -sf "$par_path" "${CARGO_HOME}/bin/agent-router" || fail "failed to update Cargo bin agent-router alias"
+  fi
+  info "installed: $INSTALL_DIR/par"
+  info "linked: $INSTALL_DIR/agent-router"
 
   if ! printf '%s' "$PATH" | grep -q "$INSTALL_DIR"; then
     warn "$INSTALL_DIR is not on PATH; add it before using par"

@@ -14,7 +14,7 @@ use process::run_invocation;
 
 fn main() {
     if let Err(error) = run() {
-        let _ = writeln!(io::stderr(), "agent-router: {error}");
+        let _ = writeln!(io::stderr(), "par: {error}");
         std::process::exit(1);
     }
 }

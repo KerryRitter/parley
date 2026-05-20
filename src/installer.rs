@@ -39,11 +39,10 @@ const INSTALLERS: &[Installer] = &[
     Installer {
         name: "claude",
         binary: "claude",
-        kind: InstallerKind::Direct {
-            command: "npm",
-            args: &["install", "-g", "@anthropic-ai/claude-code"],
+        kind: InstallerKind::Shell {
+            command: "curl -fsSL https://claude.ai/install.sh | bash",
         },
-        source: "https://docs.claude.com/en/docs/claude-code/setup",
+        source: "https://code.claude.com/docs/en/setup",
     },
     Installer {
         name: "codex",
@@ -90,11 +89,10 @@ const INSTALLERS: &[Installer] = &[
     Installer {
         name: "qwen",
         binary: "qwen",
-        kind: InstallerKind::Direct {
-            command: "npm",
-            args: &["install", "-g", "@qwen-code/qwen-code"],
+        kind: InstallerKind::Shell {
+            command: "curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh | bash",
         },
-        source: "https://qwenlm.github.io/qwen-code-docs/en/deployment/",
+        source: "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
     },
     Installer {
         name: "aider",
@@ -115,9 +113,8 @@ const INSTALLERS: &[Installer] = &[
     Installer {
         name: "copilot",
         binary: "copilot",
-        kind: InstallerKind::Direct {
-            command: "npm",
-            args: &["install", "-g", "@github/copilot"],
+        kind: InstallerKind::Shell {
+            command: "curl -fsSL https://gh.io/copilot-install | bash",
         },
         source: "https://docs.github.com/copilot/how-tos/copilot-cli/install-copilot-cli",
     },
@@ -284,7 +281,21 @@ mod tests {
 
     #[test]
     fn exposes_expected_installers() {
-        assert!(known_installers().contains(&"claude"));
-        assert!(known_installers().contains(&"antigravity"));
+        assert_eq!(
+            known_installers(),
+            vec![
+                "claude",
+                "codex",
+                "cursor",
+                "gemini",
+                "goose",
+                "opencode",
+                "qwen",
+                "aider",
+                "amazon-q",
+                "copilot",
+                "antigravity",
+            ]
+        );
     }
 }
