@@ -1,4 +1,4 @@
-use super::{add_passthrough, Harness, Invocation, Request};
+use super::{add_passthrough, add_yolo_args, Harness, Invocation, Request};
 
 pub(crate) fn new() -> Box<dyn Harness> {
     Box::new(AmazonQHarness)
@@ -14,6 +14,7 @@ impl Harness for AmazonQHarness {
             args.extend(["--agent".to_string(), agent.clone()]);
         }
 
+        args = add_yolo_args(args, request)?;
         args.push(request.prompt.clone());
 
         Ok(Invocation::new("q", add_passthrough(args, request)))

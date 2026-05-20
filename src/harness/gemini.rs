@@ -1,4 +1,4 @@
-use super::{add_passthrough, plain_model, Harness, Invocation, Request};
+use super::{add_passthrough, add_yolo_args, plain_model, Harness, Invocation, Request};
 
 pub(crate) fn new() -> Box<dyn Harness> {
     Box::new(GeminiHarness)
@@ -17,6 +17,7 @@ impl Harness for GeminiHarness {
             args.extend(["--output-format".to_string(), format.clone()]);
         }
 
+        let args = add_yolo_args(args, request)?;
         Ok(Invocation::new("gemini", add_passthrough(args, request)))
     }
 }

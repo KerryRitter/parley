@@ -228,6 +228,32 @@ Use Codex:
 par --harness codex --model gpt-5.4 -p "add parser tests"
 ```
 
+Set the default harness on this machine:
+
+```sh
+par default codex
+par -p "add parser tests"
+```
+
+Persist a default harness with permission bypass enabled:
+
+```sh
+par default claude --yolo
+par current
+```
+
+The default is stored in `~/.config/par/default`, or `$XDG_CONFIG_HOME/par/default` when `XDG_CONFIG_HOME` is set. Override the path with `PAR_DEFAULT_FILE`.
+
+Create shortcut scripts for yolo-capable harnesses:
+
+```sh
+par shims install
+claudey -p "work in this sandbox"
+codexy "work in this sandbox"
+```
+
+By default, shims are written to `~/.local/bin`. Override this with `par shims install --dir <dir>` or `PAR_SHIM_DIR`.
+
 Use OpenCode with provider-qualified model routing:
 
 ```sh
@@ -287,6 +313,8 @@ par [options] [-p <prompt>] [positional prompt]
 | `--permission-mode <mode>` | Permission/sandbox mode where supported. |
 | `--max-turns <n>` | Maximum agent turns where supported. |
 | `--cwd <path>` | Working directory for the child process. |
+| `--yolo` | Add the harness-specific permission bypass flag where supported. |
+| `--no-yolo` | Disable a persisted yolo default for this run. |
 | `--dry-run` | Print the routed invocation as JSON. |
 | `--help`, `-h` | Print help. |
 | `--version`, `-v` | Print version. |
@@ -298,7 +326,21 @@ Environment defaults:
 export AGENT_ROUTER_HARNESS=codex
 export AGENT_ROUTER_PROVIDER=openai
 export AGENT_ROUTER_MODEL=gpt-5.4
+export AGENT_ROUTER_YOLO=true
 ```
+
+Persisted default commands:
+
+```sh
+par default                  # show persisted defaults
+par default codex --yolo     # set harness and yolo default
+par default --no-yolo        # keep harness, disable yolo
+par default --path           # print the default file path
+par current                  # alias for showing defaults
+par list                     # list supported harness names
+```
+
+This follows the useful part of `nvm`'s command shape: a default alias, `use`-style setter, `current`, and `list`. `par` does not manage installed versions; downstream CLIs still own their own install and upgrade flows.
 
 Prompt input rules:
 
@@ -328,24 +370,28 @@ Claude:
 
 - Uses `claude -p`.
 - Supports `--model`, `--output-format`, `--input-format`, `--permission-mode`, and `--max-turns`.
+- `--yolo` maps to `--dangerously-skip-permissions`.
 
 Codex:
 
 - Uses `codex exec`.
 - `--output-format json` and `--output-format stream-json` map to `--json`.
 - Provider is currently preserved in `AGENT_ROUTER_PROVIDER` for future policy, but Codex receives the plain model name.
+- `--yolo` maps to `--dangerously-bypass-approvals-and-sandbox` for routed noninteractive runs. The `codexy` shim uses the shorter `codex --yolo` entrypoint.
 
 Cursor:
 
 - Uses `cursor-agent -p`.
 - Supports plain `--model`.
 - Supports `--output-format` when accepted by the installed Cursor agent.
+- `--yolo` maps to `--force`, which Cursor requires for print-mode file writes.
 
 Gemini:
 
 - Uses `gemini --prompt`.
 - Supports plain `--model`.
 - Supports `--output-format` when accepted by the installed Gemini CLI.
+- `--yolo` maps to `--yolo`.
 
 Goose:
 
@@ -355,6 +401,7 @@ Goose:
 - `--permission-mode` maps to `GOOSE_MODE`.
 - `--max-turns` maps to `GOOSE_MAX_TURNS`.
 - `--agent <name>` maps to `goose run --with-builtin <name>`.
+- `--yolo` sets `GOOSE_MODE=auto` unless `--permission-mode` is provided.
 
 OpenCode:
 
@@ -362,18 +409,21 @@ OpenCode:
 - `--provider anthropic --model claude-sonnet-4-6` becomes `--model anthropic/claude-sonnet-4-6`.
 - `--output-format json` and `--output-format stream-json` map to `--format json`.
 - `--agent` maps to `--agent`.
+- `--yolo` maps to `--dangerously-skip-permissions`.
 
 Qwen:
 
 - Uses `qwen -p`.
 - Supports plain `--model`.
 - Supports `--output-format` when accepted by the installed Qwen CLI.
+- `--yolo` maps to `--yolo`.
 
 Aider:
 
 - Uses `aider --message`.
 - Provider and model are joined for `--model`, such as `anthropic/claude-sonnet-4-6`.
 - Use `--` for Aider-specific automation flags, for example `--yes`.
+- `--yolo` maps to `--yes-always`.
 
 Amazon Q:
 
@@ -385,6 +435,7 @@ Copilot:
 
 - Provisional adapter.
 - Uses `copilot -p`.
+- `--yolo` maps to `--yolo`.
 - Validate against the installed CLI before relying on it in automation.
 
 Antigravity:
@@ -392,6 +443,7 @@ Antigravity:
 - Experimental adapter.
 - Uses the `agy` command installed by Google Antigravity.
 - Official docs currently describe the interactive AGY CLI rather than a stable print/headless mode. The adapter passes the prompt to `agy` and leaves version-specific flags to `--`.
+- `--yolo` maps to `--dangerously-skip-permissions`.
 
 ## Architecture
 
@@ -529,7 +581,7 @@ Recommended first public release checklist:
 
 `par` does not inspect or redact prompt content. Anything passed to stdin or `-p` is forwarded to the selected harness. The selected harness may send that content to its configured provider.
 
-The router also does not weaken or bypass harness sandboxing. Permission behavior is delegated to the downstream CLI. When a shared option like `--permission-mode` is mapped, it uses the target harness's documented control surface.
+The router does not weaken or bypass harness sandboxing unless you explicitly opt into `--yolo` or persist `yolo=true` in the default file. Permission behavior is delegated to the downstream CLI. When a shared option like `--permission-mode` or `--yolo` is mapped, it uses the target harness's command surface.
 
 Use `--dry-run` when validating automation that may include secrets or proprietary context.
 

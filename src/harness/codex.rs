@@ -16,6 +16,9 @@ impl Harness for CodexHarness {
         if is_json_output(request) {
             args.push("--json".to_string());
         }
+        if request.yolo {
+            args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
+        }
 
         args.push(request.prompt.clone());
 

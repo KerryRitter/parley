@@ -1,3 +1,4 @@
+use crate::harness::{ShimCommand, ShimOptions};
 use crate::installer::{InstallOptions, InstallTarget};
 use crate::EnvDefaults;
 
@@ -15,14 +16,30 @@ pub(crate) struct CliOptions {
     pub prompt: Option<String>,
     pub passthrough: Vec<String>,
     pub dry_run: bool,
+    pub yolo: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CliAction {
     Help,
     Version,
+    Default(DefaultCommand),
+    Shims(ShimOptions),
     Install(InstallOptions),
     Run(Box<CliOptions>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DefaultCommand {
+    Show,
+    Path,
+    List,
+    Set {
+        harness: Option<String>,
+        provider: Option<String>,
+        model: Option<String>,
+        yolo: Option<bool>,
+    },
 }
 
 pub(crate) fn parse_args<I>(argv: I, defaults: EnvDefaults) -> Result<CliAction, String>
@@ -31,15 +48,35 @@ where
 {
     let mut args = argv.into_iter().peekable();
 
-    if matches!(args.peek().map(String::as_str), Some("install")) {
-        args.next();
-        return parse_install_args(args);
+    match args.peek().map(String::as_str) {
+        Some("install") => {
+            args.next();
+            return parse_install_args(args);
+        }
+        Some("default" | "use") => {
+            args.next();
+            return parse_default_args(args);
+        }
+        Some("current") => {
+            args.next();
+            return Ok(CliAction::Default(DefaultCommand::Show));
+        }
+        Some("list" | "ls") => {
+            args.next();
+            return Ok(CliAction::Default(DefaultCommand::List));
+        }
+        Some("shims") => {
+            args.next();
+            return parse_shim_args(args);
+        }
+        _ => {}
     }
 
     let mut options = CliOptions {
         harness: defaults.harness.unwrap_or_else(|| "claude".to_string()),
         provider: defaults.provider,
         model: defaults.model,
+        yolo: defaults.yolo,
         ..CliOptions::default()
     };
 
@@ -48,6 +85,8 @@ where
             "--help" | "-h" => return Ok(CliAction::Help),
             "--version" | "-v" => return Ok(CliAction::Version),
             "--dry-run" => options.dry_run = true,
+            "--yolo" => options.yolo = true,
+            "--no-yolo" => options.yolo = false,
             "--" => {
                 options.passthrough.extend(args);
                 break;
@@ -124,6 +163,9 @@ pub(crate) fn usage() -> &'static str {
   par -p \"prompt\" --harness codex --model gpt-5.4
   par --harness opencode --provider anthropic --model claude-sonnet-4-6 \"fix the failing tests\"
   cat README.md | par -p \"summarize this\" --harness gemini --output-format json
+  par default codex --yolo
+  par current
+  par shims install
   par install claude
   par install list
 
@@ -134,8 +176,22 @@ Options:
   --agent <name>          Agent/persona name for harnesses that support it
   --output-format <fmt>   text, json, stream-json when supported by target
   --cwd <path>            Working directory for the target CLI
+  --yolo                  Add the harness-specific permission bypass flag where supported
+  --no-yolo               Disable a persisted yolo default for this run
   --dry-run               Print the routed command as JSON
   --                      Pass remaining flags through to the target CLI
+
+Defaults:
+  default [name]          Show or set the persisted default harness
+  default <name> --yolo   Set default harness and enable yolo by default
+  default --no-yolo       Disable yolo in the persisted default
+  current                 Show persisted defaults
+  list                    List supported harness names
+
+Shims:
+  shims install           Write *y shortcut scripts such as claudey and codexy
+  shims install --dir <d> Write shims to a specific directory
+  shims list              Print generated shim names and commands
 
 Install:
   install <name>          Install one supported downstream harness CLI
@@ -144,7 +200,7 @@ Install:
   install --dry-run <name> Print installer commands without running them
 
 Environment defaults:
-  AGENT_ROUTER_HARNESS, AGENT_ROUTER_PROVIDER, AGENT_ROUTER_MODEL
+  AGENT_ROUTER_HARNESS, AGENT_ROUTER_PROVIDER, AGENT_ROUTER_MODEL, AGENT_ROUTER_YOLO
 "
 }
 
@@ -172,6 +228,96 @@ where
     }))
 }
 
+fn parse_default_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let mut harness = None;
+    let mut provider = None;
+    let mut model = None;
+    let mut yolo = None;
+    let mut saw_update = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => return Ok(CliAction::Help),
+            "--path" => return Ok(CliAction::Default(DefaultCommand::Path)),
+            "--yolo" => {
+                yolo = Some(true);
+                saw_update = true;
+            }
+            "--no-yolo" => {
+                yolo = Some(false);
+                saw_update = true;
+            }
+            "--provider" => {
+                provider = Some(require_value(&mut args, "--provider")?);
+                saw_update = true;
+            }
+            "--model" | "-m" => {
+                model = Some(require_value(&mut args, "--model")?);
+                saw_update = true;
+            }
+            _ if arg.starts_with("--provider=") => {
+                provider = Some(value_after_equals(&arg, "--provider="));
+                saw_update = true;
+            }
+            _ if arg.starts_with("--model=") => {
+                model = Some(value_after_equals(&arg, "--model="));
+                saw_update = true;
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown default option: {arg}")),
+            _ => {
+                harness = Some(arg);
+                saw_update = true;
+            }
+        }
+    }
+
+    if saw_update {
+        Ok(CliAction::Default(DefaultCommand::Set {
+            harness,
+            provider,
+            model,
+            yolo,
+        }))
+    } else {
+        Ok(CliAction::Default(DefaultCommand::Show))
+    }
+}
+
+fn parse_shim_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let command = match args.next().as_deref() {
+        Some("install") => ShimCommand::Install,
+        Some("list" | "ls") | None => ShimCommand::List,
+        Some("--help" | "-h") => return Ok(CliAction::Help),
+        Some(value) => return Err(format!("unknown shims command: {value}")),
+    };
+    let mut dir = None;
+    let mut dry_run = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => return Ok(CliAction::Help),
+            "--dir" => dir = Some(require_value(&mut args, "--dir")?),
+            "--dry-run" => dry_run = true,
+            _ if arg.starts_with("--dir=") => dir = Some(value_after_equals(&arg, "--dir=")),
+            _ => return Err(format!("unknown shims option: {arg}")),
+        }
+    }
+
+    Ok(CliAction::Shims(ShimOptions {
+        command,
+        dir,
+        dry_run,
+    }))
+}
+
 fn require_value<I>(args: &mut std::iter::Peekable<I>, flag: &str) -> Result<String, String>
 where
     I: Iterator<Item = String>,
@@ -195,6 +341,7 @@ mod tests {
             harness: None,
             provider: None,
             model: None,
+            yolo: false,
         }
     }
 
@@ -245,6 +392,43 @@ mod tests {
             CliAction::Install(InstallOptions {
                 target: InstallTarget::One("claude".to_string()),
                 dry_run: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_default_set_action() {
+        let action = parse_args(
+            ["default", "codex", "--model", "gpt-5.4", "--yolo"].map(String::from),
+            defaults(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            action,
+            CliAction::Default(DefaultCommand::Set {
+                harness: Some("codex".to_string()),
+                provider: None,
+                model: Some("gpt-5.4".to_string()),
+                yolo: Some(true),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_shims_install_action() {
+        let action = parse_args(
+            ["shims", "install", "--dir", "/tmp/par-shims"].map(String::from),
+            defaults(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            action,
+            CliAction::Shims(ShimOptions {
+                command: ShimCommand::Install,
+                dir: Some("/tmp/par-shims".to_string()),
+                dry_run: false,
             })
         );
     }

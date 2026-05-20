@@ -12,6 +12,12 @@ mod opencode;
 mod qwen;
 
 use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use crate::cli::CliOptions;
 use crate::model::{ModelFactory, ModelFormat};
@@ -34,6 +40,7 @@ pub(crate) struct Request {
     pub prompt: String,
     pub passthrough: Vec<String>,
     pub dry_run: bool,
+    pub yolo: bool,
 }
 
 impl Request {
@@ -56,9 +63,100 @@ impl Request {
             prompt,
             passthrough: options.passthrough,
             dry_run: options.dry_run,
+            yolo: options.yolo,
         })
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ShimCommand {
+    Install,
+    List,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ShimOptions {
+    pub(crate) command: ShimCommand,
+    pub(crate) dir: Option<String>,
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HarnessSpec {
+    pub(crate) name: &'static str,
+    pub(crate) binary: &'static str,
+    pub(crate) shim: &'static str,
+    pub(crate) yolo_args: &'static [&'static str],
+}
+
+const HARNESS_SPECS: &[HarnessSpec] = &[
+    HarnessSpec {
+        name: "claude",
+        binary: "claude",
+        shim: "claudey",
+        yolo_args: &["--dangerously-skip-permissions"],
+    },
+    HarnessSpec {
+        name: "codex",
+        binary: "codex",
+        shim: "codexy",
+        yolo_args: &["--yolo"],
+    },
+    HarnessSpec {
+        name: "cursor",
+        binary: "cursor-agent",
+        shim: "cursory",
+        yolo_args: &["--force"],
+    },
+    HarnessSpec {
+        name: "gemini",
+        binary: "gemini",
+        shim: "geminiy",
+        yolo_args: &["--yolo"],
+    },
+    HarnessSpec {
+        name: "goose",
+        binary: "goose",
+        shim: "goosey",
+        yolo_args: &["auto"],
+    },
+    HarnessSpec {
+        name: "opencode",
+        binary: "opencode",
+        shim: "opencodey",
+        yolo_args: &["--dangerously-skip-permissions"],
+    },
+    HarnessSpec {
+        name: "qwen",
+        binary: "qwen",
+        shim: "qweny",
+        yolo_args: &["--yolo"],
+    },
+    HarnessSpec {
+        name: "aider",
+        binary: "aider",
+        shim: "aidery",
+        yolo_args: &["--yes-always"],
+    },
+    HarnessSpec {
+        name: "amazon-q",
+        binary: "q",
+        shim: "qy",
+        yolo_args: &[],
+    },
+    HarnessSpec {
+        name: "copilot",
+        binary: "copilot",
+        shim: "copiloty",
+        yolo_args: &["--yolo"],
+    },
+    HarnessSpec {
+        name: "antigravity",
+        binary: "agy",
+        shim: "agyy",
+        yolo_args: &["--dangerously-skip-permissions"],
+    },
+];
 
 type HarnessConstructor = fn() -> Box<dyn Harness>;
 
@@ -104,9 +202,38 @@ impl HarnessFactory {
     }
 }
 
+pub(crate) fn known_harnesses() -> Vec<&'static str> {
+    HARNESS_SPECS.iter().map(|spec| spec.name).collect()
+}
+
+pub(crate) fn spec_for_harness(name: &str) -> Option<&'static HarnessSpec> {
+    let normalized = normalize_harness(name);
+    HARNESS_SPECS.iter().find(|spec| spec.name == normalized)
+}
+
 pub(crate) fn add_passthrough(mut args: Vec<String>, request: &Request) -> Vec<String> {
     args.extend(request.passthrough.iter().cloned());
     args
+}
+
+pub(crate) fn add_yolo_args(
+    mut args: Vec<String>,
+    request: &Request,
+) -> Result<Vec<String>, String> {
+    if !request.yolo {
+        return Ok(args);
+    }
+
+    let spec = spec_for_harness(&request.harness)
+        .ok_or_else(|| format!("unknown harness \"{}\"", request.harness))?;
+    if spec.yolo_args.is_empty() {
+        return Err(format!(
+            "harness \"{}\" does not have a known yolo flag",
+            request.harness
+        ));
+    }
+    args.extend(spec.yolo_args.iter().map(|arg| (*arg).to_string()));
+    Ok(args)
 }
 
 pub(crate) fn is_json_output(request: &Request) -> bool {
@@ -136,7 +263,7 @@ fn merge_prompt(piped_input: &str, prompt: Option<&str>) -> Option<String> {
     }
 }
 
-fn normalize_harness(harness: &str) -> String {
+pub(crate) fn normalize_harness(harness: &str) -> String {
     match harness.to_ascii_lowercase().as_str() {
         "cursor-agent" => "cursor".to_string(),
         "open-code" => "opencode".to_string(),
@@ -147,6 +274,75 @@ fn normalize_harness(harness: &str) -> String {
         "agy" | "google-antigravity" => "antigravity".to_string(),
         value => value.to_string(),
     }
+}
+
+pub(crate) fn run_shims(options: ShimOptions) -> Result<(), String> {
+    match options.command {
+        ShimCommand::List => {
+            for spec in HARNESS_SPECS {
+                if spec.yolo_args.is_empty() {
+                    println!("{:<12} unsupported", spec.shim);
+                } else {
+                    println!("{:<12} {} \"$@\"", spec.shim, shim_command_preview(spec));
+                }
+            }
+            Ok(())
+        }
+        ShimCommand::Install => {
+            let dir = match options.dir {
+                Some(dir) => PathBuf::from(dir),
+                None => default_shim_dir()?,
+            };
+            if !options.dry_run {
+                fs::create_dir_all(&dir)
+                    .map_err(|error| format!("failed to create {}: {error}", dir.display()))?;
+            }
+            for spec in HARNESS_SPECS {
+                if spec.yolo_args.is_empty() {
+                    println!("skip: {} has no known yolo flag", spec.name);
+                    continue;
+                }
+                let path = dir.join(spec.shim);
+                let script = shim_script(spec);
+                if options.dry_run {
+                    println!("dry-run: write {}", path.display());
+                    continue;
+                }
+                fs::write(&path, script)
+                    .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+                #[cfg(unix)]
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                    .map_err(|error| format!("failed to chmod {}: {error}", path.display()))?;
+                println!("installed: {}", path.display());
+            }
+            Ok(())
+        }
+    }
+}
+
+fn default_shim_dir() -> Result<PathBuf, String> {
+    if let Ok(dir) = env::var("PAR_SHIM_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = env::var("HOME").map_err(|_| "HOME is not set; cannot find shim dir")?;
+    Ok(PathBuf::from(home).join(".local").join("bin"))
+}
+
+fn shim_script(spec: &HarnessSpec) -> String {
+    format!(
+        "#!/usr/bin/env bash\nset -euo pipefail\nexec {} \"$@\"\n",
+        shim_command_preview(spec)
+    )
+}
+
+fn shim_command_preview(spec: &HarnessSpec) -> String {
+    if spec.name == "goose" {
+        return format!("env GOOSE_MODE=auto {}", spec.binary);
+    }
+    if spec.name == "opencode" {
+        return format!("{} run {}", spec.binary, spec.yolo_args.join(" "));
+    }
+    format!("{} {}", spec.binary, spec.yolo_args.join(" "))
 }
 
 #[cfg(test)]
@@ -244,6 +440,83 @@ mod tests {
                 "json",
             ]
         );
+    }
+
+    #[test]
+    fn factory_builds_claude_yolo_invocation() {
+        let request = Request::from_options(
+            CliOptions {
+                harness: "claude".to_string(),
+                prompt: Some("fix it".to_string()),
+                yolo: true,
+                ..CliOptions::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+
+        let invocation = HarnessFactory::default()
+            .create(&request.harness)
+            .unwrap()
+            .build(&request)
+            .unwrap();
+
+        assert_eq!(
+            invocation.args,
+            vec!["-p", "fix it", "--dangerously-skip-permissions"]
+        );
+    }
+
+    #[test]
+    fn factory_builds_codex_yolo_invocation() {
+        let request = Request::from_options(
+            CliOptions {
+                harness: "codex".to_string(),
+                prompt: Some("fix it".to_string()),
+                yolo: true,
+                ..CliOptions::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+
+        let invocation = HarnessFactory::default()
+            .create(&request.harness)
+            .unwrap()
+            .build(&request)
+            .unwrap();
+
+        assert_eq!(
+            invocation.args,
+            vec![
+                "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "fix it"
+            ]
+        );
+    }
+
+    #[test]
+    fn factory_builds_goose_yolo_invocation() {
+        let request = Request::from_options(
+            CliOptions {
+                harness: "goose".to_string(),
+                prompt: Some("fix it".to_string()),
+                yolo: true,
+                ..CliOptions::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+
+        let invocation = HarnessFactory::default()
+            .create(&request.harness)
+            .unwrap()
+            .build(&request)
+            .unwrap();
+
+        assert_eq!(invocation.args, vec!["run", "-t", "fix it"]);
+        assert_eq!(invocation.env.get("GOOSE_MODE"), Some(&"auto".to_string()));
     }
 
     #[test]

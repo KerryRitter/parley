@@ -26,6 +26,8 @@ impl Harness for GooseHarness {
         }
         if let Some(mode) = &request.permission_mode {
             invocation = invocation.with_env("GOOSE_MODE", mode);
+        } else if request.yolo {
+            invocation = invocation.with_env("GOOSE_MODE", "auto");
         }
         if let Some(max_turns) = &request.max_turns {
             invocation = invocation.with_env("GOOSE_MAX_TURNS", max_turns);

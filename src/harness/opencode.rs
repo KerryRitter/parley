@@ -1,5 +1,6 @@
 use super::{
-    add_passthrough, is_json_output, provider_qualified_model, Harness, Invocation, Request,
+    add_passthrough, add_yolo_args, is_json_output, provider_qualified_model, Harness, Invocation,
+    Request,
 };
 
 pub(crate) fn new() -> Box<dyn Harness> {
@@ -22,6 +23,7 @@ impl Harness for OpenCodeHarness {
             args.extend(["--format".to_string(), "json".to_string()]);
         }
 
+        let mut args = add_yolo_args(args, request)?;
         args.push(request.prompt.clone());
 
         Ok(Invocation::new("opencode", add_passthrough(args, request)))

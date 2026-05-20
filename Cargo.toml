@@ -1,6 +1,6 @@
 [package]
 name = "programmatic-agent-router"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Rust CLI router for programmatic AI agent CLIs."
 license = "MIT"

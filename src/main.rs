@@ -1,4 +1,5 @@
 mod cli;
+mod config;
 mod harness;
 mod installer;
 mod model;
@@ -8,6 +9,7 @@ use std::env;
 use std::io::{self, IsTerminal, Read, Write};
 
 use cli::{parse_args, usage, CliAction};
+use config::DefaultConfig;
 use harness::{HarnessFactory, Request};
 use installer::run_install;
 use process::run_invocation;
@@ -20,7 +22,7 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let action = parse_args(env::args().skip(1), EnvDefaults::from_env())?;
+    let action = parse_args(env::args().skip(1), EnvDefaults::load())?;
 
     match action {
         CliAction::Help => {
@@ -32,6 +34,8 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         CliAction::Install(options) => run_install(options),
+        CliAction::Default(command) => config::run_default_command(command),
+        CliAction::Shims(options) => harness::run_shims(options),
         CliAction::Run(options) => {
             let stdin_text = read_stdin_if_piped()?;
             let request = Request::from_options(*options, stdin_text)?;
@@ -65,14 +69,32 @@ pub(crate) struct EnvDefaults {
     pub(crate) harness: Option<String>,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
+    pub(crate) yolo: bool,
 }
 
 impl EnvDefaults {
-    fn from_env() -> Self {
+    fn load() -> Self {
+        let file = DefaultConfig::load().unwrap_or_default();
+        let selection = file.selection;
+
         Self {
-            harness: env::var("AGENT_ROUTER_HARNESS").ok(),
-            provider: env::var("AGENT_ROUTER_PROVIDER").ok(),
-            model: env::var("AGENT_ROUTER_MODEL").ok(),
+            harness: env::var("AGENT_ROUTER_HARNESS").ok().or(selection.harness),
+            provider: env::var("AGENT_ROUTER_PROVIDER")
+                .ok()
+                .or(selection.provider),
+            model: env::var("AGENT_ROUTER_MODEL").ok().or(selection.model),
+            yolo: env::var("AGENT_ROUTER_YOLO")
+                .ok()
+                .and_then(|value| parse_bool(&value))
+                .unwrap_or(selection.yolo),
         }
+    }
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
