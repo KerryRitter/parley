@@ -9,7 +9,9 @@ struct AntigravityHarness;
 impl Harness for AntigravityHarness {
     fn build(&self, request: &Request) -> Result<Invocation, String> {
         let mut args = add_yolo_args(Vec::new(), request)?;
-        args.push(request.prompt.clone());
+        if let Some(prompt) = &request.prompt {
+            args.push(prompt.clone());
+        }
 
         Ok(Invocation::new("agy", add_passthrough(args, request)))
     }

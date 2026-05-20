@@ -15,7 +15,9 @@ impl Harness for AmazonQHarness {
         }
 
         args = add_yolo_args(args, request)?;
-        args.push(request.prompt.clone());
+        if let Some(prompt) = &request.prompt {
+            args.push(prompt.clone());
+        }
 
         Ok(Invocation::new("q", add_passthrough(args, request)))
     }

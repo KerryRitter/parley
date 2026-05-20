@@ -11,7 +11,10 @@ struct OpenCodeHarness;
 
 impl Harness for OpenCodeHarness {
     fn build(&self, request: &Request) -> Result<Invocation, String> {
-        let mut args = vec!["run".to_string()];
+        let mut args = Vec::new();
+        if request.prompt.is_some() {
+            args.push("run".to_string());
+        }
 
         if let Some(model) = provider_qualified_model(request) {
             args.extend(["--model".to_string(), model]);
@@ -19,12 +22,16 @@ impl Harness for OpenCodeHarness {
         if let Some(agent) = &request.agent {
             args.extend(["--agent".to_string(), agent.clone()]);
         }
-        if is_json_output(request) {
+        if request.prompt.is_some() && is_json_output(request) {
             args.extend(["--format".to_string(), "json".to_string()]);
         }
 
-        let mut args = add_yolo_args(args, request)?;
-        args.push(request.prompt.clone());
+        if request.prompt.is_some() {
+            args = add_yolo_args(args, request)?;
+        }
+        if let Some(prompt) = &request.prompt {
+            args.push(prompt.clone());
+        }
 
         Ok(Invocation::new("opencode", add_passthrough(args, request)))
     }

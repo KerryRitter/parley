@@ -8,13 +8,16 @@ struct GooseHarness;
 
 impl Harness for GooseHarness {
     fn build(&self, request: &Request) -> Result<Invocation, String> {
-        let mut args = vec!["run".to_string()];
+        let mut args = Vec::new();
 
-        if let Some(agent) = &request.agent {
-            args.extend(["--with-builtin".to_string(), agent.clone()]);
+        if let Some(prompt) = &request.prompt {
+            args.push("run".to_string());
+            if let Some(agent) = &request.agent {
+                args.extend(["--with-builtin".to_string(), agent.clone()]);
+            }
+
+            args.extend(["-t".to_string(), prompt.clone()]);
         }
-
-        args.extend(["-t".to_string(), request.prompt.clone()]);
 
         let mut invocation = Invocation::new("goose", add_passthrough(args, request));
 

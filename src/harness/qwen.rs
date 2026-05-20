@@ -8,13 +8,18 @@ struct QwenHarness;
 
 impl Harness for QwenHarness {
     fn build(&self, request: &Request) -> Result<Invocation, String> {
-        let mut args = vec!["-p".to_string(), request.prompt.clone()];
+        let mut args = Vec::new();
+        if let Some(prompt) = &request.prompt {
+            args.extend(["-p".to_string(), prompt.clone()]);
+        }
 
         if let Some(model) = plain_model(request) {
             args.extend(["--model".to_string(), model]);
         }
-        if let Some(format) = &request.output_format {
-            args.extend(["--output-format".to_string(), format.clone()]);
+        if request.prompt.is_some() {
+            if let Some(format) = &request.output_format {
+                args.extend(["--output-format".to_string(), format.clone()]);
+            }
         }
 
         let args = add_yolo_args(args, request)?;

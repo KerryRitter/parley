@@ -160,6 +160,7 @@ where
 
 pub(crate) fn usage() -> &'static str {
     "Usage:
+  par
   par -p \"prompt\" --harness codex --model gpt-5.4
   par --harness opencode --provider anthropic --model claude-sonnet-4-6 \"fix the failing tests\"
   cat README.md | par -p \"summarize this\" --harness gemini --output-format json

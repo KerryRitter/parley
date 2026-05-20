@@ -37,7 +37,7 @@ pub(crate) struct Request {
     pub max_turns: Option<String>,
     pub agent: Option<String>,
     pub cwd: Option<String>,
-    pub prompt: String,
+    pub prompt: Option<String>,
     pub passthrough: Vec<String>,
     pub dry_run: bool,
     pub yolo: bool,
@@ -45,10 +45,7 @@ pub(crate) struct Request {
 
 impl Request {
     pub(crate) fn from_options(options: CliOptions, piped_input: String) -> Result<Self, String> {
-        let prompt = merge_prompt(&piped_input, options.prompt.as_deref()).ok_or_else(|| {
-            "missing prompt; pass -p \"...\", --prompt \"...\", a positional prompt, or stdin"
-                .to_string()
-        })?;
+        let prompt = merge_prompt(&piped_input, options.prompt.as_deref());
 
         Ok(Self {
             harness: normalize_harness(&options.harness),
@@ -362,7 +359,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(request.prompt, "hello\n\nsummarize");
+        assert_eq!(request.prompt.as_deref(), Some("hello\n\nsummarize"));
     }
 
     #[test]
@@ -371,6 +368,27 @@ mod tests {
         assert_eq!(normalize_harness("cursor-agent"), "cursor");
         assert_eq!(normalize_harness("aws-q"), "amazon-q");
         assert_eq!(normalize_harness("agy"), "antigravity");
+    }
+
+    #[test]
+    fn allows_missing_prompt_for_interactive_default() {
+        let request = Request::from_options(
+            CliOptions {
+                harness: "claude".to_string(),
+                ..CliOptions::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+
+        let invocation = HarnessFactory::default()
+            .create(&request.harness)
+            .unwrap()
+            .build(&request)
+            .unwrap();
+
+        assert_eq!(invocation.command, "claude");
+        assert_eq!(invocation.args, Vec::<String>::new());
     }
 
     #[test]

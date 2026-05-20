@@ -10,7 +10,10 @@ struct AiderHarness;
 
 impl Harness for AiderHarness {
     fn build(&self, request: &Request) -> Result<Invocation, String> {
-        let mut args = vec!["--message".to_string(), request.prompt.clone()];
+        let mut args = Vec::new();
+        if let Some(prompt) = &request.prompt {
+            args.extend(["--message".to_string(), prompt.clone()]);
+        }
 
         if let Some(model) = provider_qualified_model(request) {
             args.extend(["--model".to_string(), model]);

@@ -213,12 +213,14 @@ That should install the same release binary and provide `par` as the primary CLI
 Default harness is `claude`:
 
 ```sh
+par
 par -p "summarize this repository"
 ```
 
 Equivalent routed command:
 
 ```sh
+claude
 claude -p "summarize this repository"
 ```
 
@@ -232,6 +234,7 @@ Set the default harness on this machine:
 
 ```sh
 par default codex
+par
 par -p "add parser tests"
 ```
 
@@ -298,6 +301,7 @@ par --harness aider -p "fix lint" -- --yes --no-auto-commits
 ## CLI Reference
 
 ```text
+par [options]
 par [options] [-p <prompt>] [positional prompt]
 ```
 
@@ -344,9 +348,9 @@ This follows the useful part of `nvm`'s command shape: a default alias, `use`-st
 
 Prompt input rules:
 
+- If no prompt and no stdin are provided, `par` launches the default harness's interactive entrypoint.
 - If stdin is piped and `-p` is provided, stdin is placed before the prompt with a blank line between them.
 - If stdin is piped and no prompt is provided, stdin becomes the prompt.
-- If no prompt and no stdin are provided, the command fails before launching a harness.
 
 ## Supported Harnesses
 
