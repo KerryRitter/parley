@@ -48,7 +48,8 @@ fn run() -> Result<(), String> {
                 return Ok(());
             }
 
-            run_invocation(invocation, request.cwd.as_deref())
+            let inherit_stdin = request.prompt.is_none();
+            run_invocation(invocation, request.cwd.as_deref(), inherit_stdin)
         }
     }
 }

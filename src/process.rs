@@ -2,12 +2,20 @@ use std::process::{Command, Stdio};
 
 use crate::harness::Invocation;
 
-pub(crate) fn run_invocation(invocation: Invocation, cwd: Option<&str>) -> Result<(), String> {
+pub(crate) fn run_invocation(
+    invocation: Invocation,
+    cwd: Option<&str>,
+    inherit_stdin: bool,
+) -> Result<(), String> {
     let mut command = Command::new(&invocation.command);
     command
         .args(&invocation.args)
         .envs(&invocation.env)
-        .stdin(Stdio::null())
+        .stdin(if inherit_stdin {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
