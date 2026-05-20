@@ -114,7 +114,7 @@ par install antigravity
 par install --dry-run all
 ```
 
-The installer registry is intentionally transparent: `--dry-run` prints the exact upstream install command without executing it. For harnesses that do not expose a stable terminal one-liner, such as Antigravity and Amazon Q, `par install <name>` prints the official install page and verification command instead of guessing.
+The installer registry is intentionally transparent: `--dry-run` prints the exact upstream install command without executing it. For harnesses that do not expose a stable terminal one-liner, such as Amazon Q, `par install <name>` prints the official install page and verification command instead of guessing.
 
 ### Install from Source
 

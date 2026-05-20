@@ -124,8 +124,8 @@ const INSTALLERS: &[Installer] = &[
     Installer {
         name: "antigravity",
         binary: "agy",
-        kind: InstallerKind::Manual {
-            instructions: "Install Google Antigravity from https://antigravity.google/download, then install the `agy` shell command from Antigravity's command palette if it is not already on PATH.",
+        kind: InstallerKind::Shell {
+            command: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
         },
         source: "https://antigravity.google/download",
     },
