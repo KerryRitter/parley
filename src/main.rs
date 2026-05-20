@@ -1,5 +1,6 @@
 mod cli;
 mod harness;
+mod installer;
 mod model;
 mod process;
 
@@ -8,6 +9,7 @@ use std::io::{self, IsTerminal, Read, Write};
 
 use cli::{parse_args, usage, CliAction};
 use harness::{HarnessFactory, Request};
+use installer::run_install;
 use process::run_invocation;
 
 fn main() {
@@ -29,6 +31,7 @@ fn run() -> Result<(), String> {
             println!("{}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
+        CliAction::Install(options) => run_install(options),
         CliAction::Run(options) => {
             let stdin_text = read_stdin_if_piped()?;
             let request = Request::from_options(*options, stdin_text)?;

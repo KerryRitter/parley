@@ -23,6 +23,7 @@ Programmatic agent CLIs all solve a similar problem, but their headless interfac
 - Goose uses `goose run -t`.
 - OpenCode uses `opencode run`.
 - Aider uses `aider --message`.
+- Antigravity uses the `agy` CLI surface.
 
 That makes scripts brittle. Switching harnesses means editing commands, model flags, provider syntax, JSON output flags, and environment variables. `agent-router` keeps scripts focused on intent:
 
@@ -41,6 +42,7 @@ Implemented:
 - Rust-native CLI with no runtime dependencies.
 - Shared `claude -p`-style prompt surface.
 - Harness factory pattern with isolated adapters.
+- Harness installers via `par install <harness>`.
 - Provider/model resolution layer.
 - Dry-run mode for deterministic routing tests.
 - Setup script that validates Rust, tests, linting, release build, and installed downstream harness CLIs.
@@ -99,6 +101,20 @@ Use strict harness validation if this machine should already have at least one s
 ```sh
 scripts/setup.sh --strict-harnesses
 ```
+
+## Install Harness CLIs
+
+`agent-router` can install supported downstream harness CLIs:
+
+```sh
+par install list
+par install claude
+par install codex
+par install antigravity
+par install --dry-run all
+```
+
+The installer registry is intentionally transparent: `--dry-run` prints the exact upstream install command without executing it. For harnesses that do not expose a stable terminal one-liner, such as Antigravity and Amazon Q, `par install <name>` prints the official install page and verification command instead of guessing.
 
 ### Install from Source
 
@@ -287,6 +303,7 @@ Prompt input rules:
 | `aider` | none | `aider --message "<prompt>"` |
 | `amazon-q` | `amazonq`, `aws-q`, `amazon` | `q chat "<prompt>"` |
 | `copilot` | `github-copilot` | `copilot -p "<prompt>"` |
+| `antigravity` | `agy`, `google-antigravity` | `agy "<prompt>"` |
 
 ### Harness Details
 
@@ -353,6 +370,12 @@ Copilot:
 - Uses `copilot -p`.
 - Validate against the installed CLI before relying on it in automation.
 
+Antigravity:
+
+- Experimental adapter.
+- Uses the `agy` command installed by Google Antigravity.
+- Official docs currently describe the interactive AGY CLI rather than a stable print/headless mode. The adapter passes the prompt to `agy` and leaves version-specific flags to `--`.
+
 ## Architecture
 
 The code is intentionally small and explicit.
@@ -375,7 +398,9 @@ src/
     qwen.rs            Qwen adapter
     aider.rs           Aider adapter
     amazon_q.rs        Amazon Q adapter
+    antigravity.rs     Antigravity adapter
     copilot.rs         provisional Copilot adapter
+  installer.rs         harness installer registry
 ```
 
 Core types:
@@ -385,6 +410,7 @@ Core types:
 - `Harness`: adapter trait implemented by each harness.
 - `HarnessFactory`: registry that maps harness names to adapter constructors.
 - `ModelFactory`: central place for provider/model normalization and formatting.
+- `installer.rs`: explicit upstream install commands for downstream harness CLIs.
 
 Design constraints:
 
@@ -523,5 +549,6 @@ This README was written against public docs checked on May 19, 2026:
 - [Aider scripting docs](https://aider.chat/docs/scripting.html) document `aider --message`.
 - [Amazon Q Developer CLI reference](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-reference.html) documents `q chat --agent <name> "<prompt>"`.
 - [Goose headless docs](https://block.github.io/goose/docs/tutorials/headless-goose/) document `goose run -t`.
+- [Antigravity CLI docs](https://antigravity.google/docs/cli-using) document the `agy` CLI surface and configuration model.
 
 Re-check these command surfaces before a public release. Agent CLIs change fast.

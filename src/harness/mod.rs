@@ -1,5 +1,6 @@
 mod aider;
 mod amazon_q;
+mod antigravity;
 mod claude;
 mod codex;
 mod copilot;
@@ -72,6 +73,7 @@ impl Default for HarnessFactory {
             ("codex", codex::new as HarnessConstructor),
             ("aider", aider::new as HarnessConstructor),
             ("amazon-q", amazon_q::new as HarnessConstructor),
+            ("antigravity", antigravity::new as HarnessConstructor),
             ("cursor", cursor::new as HarnessConstructor),
             ("gemini", gemini::new as HarnessConstructor),
             ("goose", goose::new as HarnessConstructor),
@@ -142,6 +144,7 @@ fn normalize_harness(harness: &str) -> String {
         "openai" => "codex".to_string(),
         "github-copilot" => "copilot".to_string(),
         "amazonq" | "aws-q" | "amazon" => "amazon-q".to_string(),
+        "agy" | "google-antigravity" => "antigravity".to_string(),
         value => value.to_string(),
     }
 }
@@ -171,6 +174,7 @@ mod tests {
         assert_eq!(normalize_harness("openai"), "codex");
         assert_eq!(normalize_harness("cursor-agent"), "cursor");
         assert_eq!(normalize_harness("aws-q"), "amazon-q");
+        assert_eq!(normalize_harness("agy"), "antigravity");
     }
 
     #[test]
@@ -347,5 +351,29 @@ mod tests {
             invocation.env.get("GOOSE_MAX_TURNS"),
             Some(&"50".to_string())
         );
+    }
+
+    #[test]
+    fn factory_builds_antigravity_invocation() {
+        let request = Request::from_options(
+            CliOptions {
+                harness: "agy".to_string(),
+                model: Some("gemini-3-pro".to_string()),
+                permission_mode: Some("always-proceed".to_string()),
+                prompt: Some("review this".to_string()),
+                ..CliOptions::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+
+        let invocation = HarnessFactory::default()
+            .create(&request.harness)
+            .unwrap()
+            .build(&request)
+            .unwrap();
+
+        assert_eq!(invocation.command, "agy");
+        assert_eq!(invocation.args, vec!["review this"]);
     }
 }

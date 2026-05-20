@@ -163,6 +163,7 @@ supported_harnesses=(
   "aider:aider"
   "amazon-q:q"
   "copilot:copilot"
+  "antigravity:agy"
 )
 
 installed_harnesses=0

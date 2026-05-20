@@ -1,3 +1,4 @@
+use crate::installer::{InstallOptions, InstallTarget};
 use crate::EnvDefaults;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -20,6 +21,7 @@ pub(crate) struct CliOptions {
 pub(crate) enum CliAction {
     Help,
     Version,
+    Install(InstallOptions),
     Run(Box<CliOptions>),
 }
 
@@ -28,6 +30,12 @@ where
     I: IntoIterator<Item = String>,
 {
     let mut args = argv.into_iter().peekable();
+
+    if matches!(args.peek().map(String::as_str), Some("install")) {
+        args.next();
+        return parse_install_args(args);
+    }
+
     let mut options = CliOptions {
         harness: defaults.harness.unwrap_or_else(|| "claude".to_string()),
         provider: defaults.provider,
@@ -116,9 +124,11 @@ pub(crate) fn usage() -> &'static str {
   agent-router -p \"prompt\" --harness codex --model gpt-5.4
   agent-router --harness opencode --provider anthropic --model claude-sonnet-4-6 \"fix the failing tests\"
   cat README.md | agent-router -p \"summarize this\" --harness gemini --output-format json
+  agent-router install claude
+  agent-router install list
 
 Options:
-  --harness <name>        claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot
+  --harness <name>        claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, antigravity
   --provider <name>       Provider namespace when the target CLI supports one
   --model, -m <name>      Model name to pass through
   --agent <name>          Agent/persona name for harnesses that support it
@@ -127,9 +137,39 @@ Options:
   --dry-run               Print the routed command as JSON
   --                      Pass remaining flags through to the target CLI
 
+Install:
+  install <name>          Install one supported downstream harness CLI
+  install list            List supported harness installers
+  install all             Run every supported installer
+  install --dry-run <name> Print installer commands without running them
+
 Environment defaults:
   AGENT_ROUTER_HARNESS, AGENT_ROUTER_PROVIDER, AGENT_ROUTER_MODEL
 "
+}
+
+fn parse_install_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut dry_run = false;
+    let mut target: Option<InstallTarget> = None;
+
+    for arg in args {
+        match arg.as_str() {
+            "--help" | "-h" => return Ok(CliAction::Help),
+            "--dry-run" => dry_run = true,
+            "list" => target = Some(InstallTarget::List),
+            "all" => target = Some(InstallTarget::All),
+            _ if arg.starts_with('-') => return Err(format!("unknown install option: {arg}")),
+            _ => target = Some(InstallTarget::One(arg)),
+        }
+    }
+
+    Ok(CliAction::Install(InstallOptions {
+        target: target.unwrap_or(InstallTarget::List),
+        dry_run,
+    }))
 }
 
 fn require_value<I>(args: &mut std::iter::Peekable<I>, flag: &str) -> Result<String, String>
@@ -190,5 +230,22 @@ mod tests {
         };
 
         assert_eq!(options.passthrough, vec!["--verbose"]);
+    }
+
+    #[test]
+    fn parses_install_action() {
+        let action = parse_args(
+            ["install", "--dry-run", "claude"].map(String::from),
+            defaults(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            action,
+            CliAction::Install(InstallOptions {
+                target: InstallTarget::One("claude".to_string()),
+                dry_run: true,
+            })
+        );
     }
 }
