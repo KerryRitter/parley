@@ -7,6 +7,19 @@ pub(crate) struct InstallOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UpdateOptions {
+    pub(crate) target: UpdateTarget,
+    pub(crate) dry_run: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum UpdateTarget {
+    Self_,
+    One(String),
+    All,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum InstallTarget {
     One(String),
     All,
@@ -111,6 +124,15 @@ const INSTALLERS: &[Installer] = &[
         source: "https://aws.amazon.com/developer/learning/q-developer-cli/",
     },
     Installer {
+        name: "kimi",
+        binary: "kimi",
+        kind: InstallerKind::Direct {
+            command: "npm",
+            args: &["install", "-g", "kimi-cli"],
+        },
+        source: "https://kimi.ai/code",
+    },
+    Installer {
         name: "copilot",
         binary: "copilot",
         kind: InstallerKind::Shell {
@@ -136,15 +158,42 @@ pub(crate) fn run_install(options: InstallOptions) -> Result<(), String> {
         }
         InstallTarget::One(name) => {
             let installer = find_installer(&name)?;
-            run_one(installer, options.dry_run)
+            run_one(installer, options.dry_run, false)
         }
         InstallTarget::All => {
             for installer in INSTALLERS {
-                run_one(installer, options.dry_run)?;
+                run_one(installer, options.dry_run, false)?;
             }
             Ok(())
         }
     }
+}
+
+pub(crate) fn run_update(options: UpdateOptions) -> Result<(), String> {
+    match options.target {
+        UpdateTarget::Self_ => update_self(options.dry_run),
+        UpdateTarget::One(name) => {
+            let installer = find_installer(&name)?;
+            run_one(installer, options.dry_run, true)
+        }
+        UpdateTarget::All => {
+            update_self(options.dry_run)?;
+            for installer in INSTALLERS {
+                run_one(installer, options.dry_run, true)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn update_self(dry_run: bool) -> Result<(), String> {
+    let command = "cargo install --git https://github.com/KerryRitter/programmatic-agent-router.git --branch main";
+    println!("updating par...");
+    if dry_run {
+        println!("dry-run: sh -c '{command}'");
+        return Ok(());
+    }
+    run_shell(command)
 }
 
 pub(crate) fn known_installers() -> Vec<&'static str> {
@@ -180,13 +229,14 @@ fn normalize_installer_name(name: &str) -> String {
         "google" | "google-gemini" => "gemini".to_string(),
         "open-code" => "opencode".to_string(),
         "amazonq" | "aws-q" | "amazon" => "amazon-q".to_string(),
+        "moonshot" | "kimi-code" => "kimi".to_string(),
         "github-copilot" => "copilot".to_string(),
         "agy" | "google-antigravity" => "antigravity".to_string(),
         value => value.to_string(),
     }
 }
 
-fn run_one(installer: &Installer, dry_run: bool) -> Result<(), String> {
+fn run_one(installer: &Installer, dry_run: bool, force: bool) -> Result<(), String> {
     println!("installer: {} ({})", installer.name, installer.source);
 
     match installer.kind {
@@ -195,7 +245,7 @@ fn run_one(installer: &Installer, dry_run: bool) -> Result<(), String> {
                 println!("dry-run: {} {}", command, args.join(" "));
                 return Ok(());
             }
-            if command_exists(installer.binary) {
+            if !force && command_exists(installer.binary) {
                 println!("already installed: {}", installer.binary);
                 return Ok(());
             }
@@ -206,7 +256,7 @@ fn run_one(installer: &Installer, dry_run: bool) -> Result<(), String> {
                 println!("dry-run: sh -c '{}'", command);
                 return Ok(());
             }
-            if command_exists(installer.binary) {
+            if !force && command_exists(installer.binary) {
                 println!("already installed: {}", installer.binary);
                 return Ok(());
             }
@@ -293,6 +343,7 @@ mod tests {
                 "qwen",
                 "aider",
                 "amazon-q",
+                "kimi",
                 "copilot",
                 "antigravity",
             ]

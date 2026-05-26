@@ -1,5 +1,5 @@
 use crate::harness::{ShimCommand, ShimOptions};
-use crate::installer::{InstallOptions, InstallTarget};
+use crate::installer::{InstallOptions, InstallTarget, UpdateOptions, UpdateTarget};
 use crate::EnvDefaults;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -26,6 +26,7 @@ pub(crate) enum CliAction {
     Default(DefaultCommand),
     Shims(ShimOptions),
     Install(InstallOptions),
+    Update(UpdateOptions),
     Run(Box<CliOptions>),
 }
 
@@ -52,6 +53,10 @@ where
         Some("install") => {
             args.next();
             return parse_install_args(args);
+        }
+        Some("update" | "upgrade") => {
+            args.next();
+            return parse_update_args(args);
         }
         Some("default" | "use") => {
             args.next();
@@ -171,7 +176,7 @@ pub(crate) fn usage() -> &'static str {
   par install list
 
 Options:
-  --harness <name>        claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, antigravity
+  --harness <name>        claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, kimi, antigravity
   --provider <name>       Provider namespace when the target CLI supports one
   --model, -m <name>      Model name to pass through
   --agent <name>          Agent/persona name for harnesses that support it
@@ -200,9 +205,40 @@ Install:
   install all             Run every supported installer
   install --dry-run <name> Print installer commands without running them
 
+Update:
+  update                  Update par itself
+  update self             Update par itself (explicit)
+  update <name>           Update a specific harness CLI
+  update all              Update par and all harness CLIs
+  update --dry-run <name> Print update commands without running them
+
 Environment defaults:
   AGENT_ROUTER_HARNESS, AGENT_ROUTER_PROVIDER, AGENT_ROUTER_MODEL, AGENT_ROUTER_YOLO
 "
+}
+
+fn parse_update_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut dry_run = false;
+    let mut target: Option<UpdateTarget> = None;
+
+    for arg in args {
+        match arg.as_str() {
+            "--help" | "-h" => return Ok(CliAction::Help),
+            "--dry-run" => dry_run = true,
+            "self" | "par" => target = Some(UpdateTarget::Self_),
+            "all" => target = Some(UpdateTarget::All),
+            _ if arg.starts_with('-') => return Err(format!("unknown update option: {arg}")),
+            _ => target = Some(UpdateTarget::One(arg)),
+        }
+    }
+
+    Ok(CliAction::Update(UpdateOptions {
+        target: target.unwrap_or(UpdateTarget::Self_),
+        dry_run,
+    }))
 }
 
 fn parse_install_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>

@@ -8,6 +8,7 @@ mod cursor;
 mod gemini;
 mod goose;
 mod invocation;
+mod kimi;
 mod opencode;
 mod qwen;
 
@@ -148,6 +149,12 @@ const HARNESS_SPECS: &[HarnessSpec] = &[
         yolo_args: &["--yolo"],
     },
     HarnessSpec {
+        name: "kimi",
+        binary: "kimi",
+        shim: "kimiy",
+        yolo_args: &["--yolo"],
+    },
+    HarnessSpec {
         name: "antigravity",
         binary: "agy",
         shim: "agyy",
@@ -174,6 +181,7 @@ impl Default for HarnessFactory {
             ("goose", goose::new as HarnessConstructor),
             ("opencode", opencode::new as HarnessConstructor),
             ("copilot", copilot::new as HarnessConstructor),
+            ("kimi", kimi::new as HarnessConstructor),
             ("qwen", qwen::new as HarnessConstructor),
         ]
         .into_iter()
@@ -268,6 +276,7 @@ pub(crate) fn normalize_harness(harness: &str) -> String {
         "openai" => "codex".to_string(),
         "github-copilot" => "copilot".to_string(),
         "amazonq" | "aws-q" | "amazon" => "amazon-q".to_string(),
+        "moonshot" | "kimi-code" => "kimi".to_string(),
         "agy" | "google-antigravity" => "antigravity".to_string(),
         value => value.to_string(),
     }

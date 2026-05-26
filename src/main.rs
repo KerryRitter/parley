@@ -11,7 +11,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use cli::{parse_args, usage, CliAction};
 use config::DefaultConfig;
 use harness::{HarnessFactory, Request};
-use installer::run_install;
+use installer::{run_install, run_update};
 use process::run_invocation;
 
 fn main() {
@@ -34,6 +34,7 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         CliAction::Install(options) => run_install(options),
+        CliAction::Update(options) => run_update(options),
         CliAction::Default(command) => config::run_default_command(command),
         CliAction::Shims(options) => harness::run_shims(options),
         CliAction::Run(options) => {
