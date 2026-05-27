@@ -1,7 +1,9 @@
 mod cli;
 mod config;
+mod convert;
 mod harness;
 mod installer;
+mod json;
 mod model;
 mod process;
 
@@ -37,6 +39,7 @@ fn run() -> Result<(), String> {
         CliAction::Update(options) => run_update(options),
         CliAction::Default(command) => config::run_default_command(command),
         CliAction::Shims(options) => harness::run_shims(options),
+        CliAction::Convert(options) => convert::run_convert(options),
         CliAction::Run(options) => {
             let stdin_text = read_stdin_if_piped()?;
             let request = Request::from_options(*options, stdin_text)?;

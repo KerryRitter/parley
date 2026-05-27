@@ -1,3 +1,4 @@
+use crate::convert::{ConvertOptions, ConvertTarget};
 use crate::harness::{ShimCommand, ShimOptions};
 use crate::installer::{InstallOptions, InstallTarget, UpdateOptions, UpdateTarget};
 use crate::EnvDefaults;
@@ -27,6 +28,7 @@ pub(crate) enum CliAction {
     Shims(ShimOptions),
     Install(InstallOptions),
     Update(UpdateOptions),
+    Convert(ConvertOptions),
     Run(Box<CliOptions>),
 }
 
@@ -73,6 +75,10 @@ where
         Some("shims") => {
             args.next();
             return parse_shim_args(args);
+        }
+        Some("convert") => {
+            args.next();
+            return parse_convert_args(args);
         }
         _ => {}
     }
@@ -211,6 +217,17 @@ Update:
   update <name>           Update a specific harness CLI
   update all              Update par and all harness CLIs
   update --dry-run <name> Print update commands without running them
+
+Convert:
+  convert                         Auto-detect source, convert to all targets
+  convert --to gemini             Convert to a specific target
+  convert --to all                Convert to all targets (default)
+  convert --from claude --to codex Explicit source and target
+  convert --dry-run               Show what files would be created
+  convert --cwd <path>            Run in a different directory
+
+  Supported sources: claude
+  Supported targets: gemini, codex, antigravity, opencode, cursor, kimi
 
 Environment defaults:
   AGENT_ROUTER_HARNESS, AGENT_ROUTER_PROVIDER, AGENT_ROUTER_MODEL, AGENT_ROUTER_YOLO
@@ -355,6 +372,50 @@ where
     }))
 }
 
+fn parse_convert_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let mut from = None;
+    let mut to = None;
+    let mut cwd = None;
+    let mut dry_run = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => return Ok(CliAction::Help),
+            "--dry-run" => dry_run = true,
+            "--from" => from = Some(require_value(&mut args, "--from")?),
+            "--to" => to = Some(require_value(&mut args, "--to")?),
+            "--cwd" => cwd = Some(require_value(&mut args, "--cwd")?),
+            _ if arg.starts_with("--from=") => from = Some(value_after_equals(&arg, "--from=")),
+            _ if arg.starts_with("--to=") => to = Some(value_after_equals(&arg, "--to=")),
+            _ if arg.starts_with("--cwd=") => cwd = Some(value_after_equals(&arg, "--cwd=")),
+            _ if arg.starts_with('-') => return Err(format!("unknown convert option: {arg}")),
+            _ => {
+                if to.is_none() {
+                    to = Some(arg);
+                } else {
+                    return Err(format!("unexpected argument: {arg}"));
+                }
+            }
+        }
+    }
+
+    let target = match to.as_deref() {
+        None | Some("all") => ConvertTarget::All,
+        Some(name) => ConvertTarget::One(name.to_string()),
+    };
+
+    Ok(CliAction::Convert(ConvertOptions {
+        from,
+        to: target,
+        cwd,
+        dry_run,
+    }))
+}
+
 fn require_value<I>(args: &mut std::iter::Peekable<I>, flag: &str) -> Result<String, String>
 where
     I: Iterator<Item = String>,
@@ -448,6 +509,56 @@ mod tests {
                 provider: None,
                 model: Some("gpt-5.4".to_string()),
                 yolo: Some(true),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_convert_all_default() {
+        let action = parse_args(["convert"].map(String::from), defaults()).unwrap();
+
+        assert_eq!(
+            action,
+            CliAction::Convert(ConvertOptions {
+                from: None,
+                to: ConvertTarget::All,
+                cwd: None,
+                dry_run: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_convert_with_flags() {
+        let action = parse_args(
+            ["convert", "--from", "claude", "--to", "gemini", "--dry-run"].map(String::from),
+            defaults(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            action,
+            CliAction::Convert(ConvertOptions {
+                from: Some("claude".to_string()),
+                to: ConvertTarget::One("gemini".to_string()),
+                cwd: None,
+                dry_run: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_convert_positional_target() {
+        let action =
+            parse_args(["convert", "opencode"].map(String::from), defaults()).unwrap();
+
+        assert_eq!(
+            action,
+            CliAction::Convert(ConvertOptions {
+                from: None,
+                to: ConvertTarget::One("opencode".to_string()),
+                cwd: None,
+                dry_run: false,
             })
         );
     }
