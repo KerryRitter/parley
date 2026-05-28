@@ -126,9 +126,8 @@ const INSTALLERS: &[Installer] = &[
     Installer {
         name: "kimi",
         binary: "kimi",
-        kind: InstallerKind::Direct {
-            command: "npm",
-            args: &["install", "-g", "kimi-cli"],
+        kind: InstallerKind::Shell {
+            command: "curl -LsSf https://code.kimi.com/install.sh | bash",
         },
         source: "https://kimi.ai/code",
     },
