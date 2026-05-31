@@ -14,9 +14,13 @@ pub(crate) struct CommandFile {
     pub rel_path: String,
     pub name: String,
     pub description: String,
-    /// Per-command model hint from frontmatter (`model:`), if any.
+    /// Per-command model hint from frontmatter (`model:`), if any. Parsed and
+    /// tested; not yet emitted by any harness renderer.
+    #[allow(dead_code)]
     pub model: Option<String>,
     /// Argument placeholders detected in the body (e.g. `{JIRA_KEY}`, `$1`).
+    /// Parsed and tested; not yet emitted by any harness renderer.
+    #[allow(dead_code)]
     pub args: Vec<String>,
     /// Body with the frontmatter block stripped.
     pub body: String,
@@ -26,11 +30,16 @@ pub(crate) struct ContentFile {
     pub filename: String,
     /// Skill/reference name (frontmatter `name:` or filename stem).
     pub name: String,
+    /// Parsed for completeness; renderers emit the body, not this.
+    #[allow(dead_code)]
     pub description: String,
     /// Body with the frontmatter block stripped.
     pub body: String,
 }
 
+/// Parsed persona metadata. Only `name` is consumed today (link resolution);
+/// the rest is parsed and tested for upcoming persona rendering.
+#[allow(dead_code)]
 pub(crate) struct PersonaFile {
     pub name: String,
     pub description: String,
