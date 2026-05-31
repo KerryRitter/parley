@@ -74,7 +74,9 @@ pub(crate) struct EnvDefaults {
     pub(crate) harness: Option<String>,
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
-    pub(crate) yolo: bool,
+    /// None = unset (yolo defaults on); Some(false) = an explicit opt-out via
+    /// AGENT_ROUTER_YOLO or a persisted `default --no-yolo`.
+    pub(crate) yolo: Option<bool>,
 }
 
 impl EnvDefaults {
@@ -90,8 +92,7 @@ impl EnvDefaults {
             model: env::var("AGENT_ROUTER_MODEL").ok().or(selection.model),
             yolo: env::var("AGENT_ROUTER_YOLO")
                 .ok()
-                .and_then(|value| parse_bool(&value))
-                .unwrap_or(selection.yolo),
+                .and_then(|value| parse_bool(&value)),
         }
     }
 }

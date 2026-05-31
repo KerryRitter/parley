@@ -87,13 +87,22 @@ where
         harness: defaults.harness.unwrap_or_else(|| "claude".to_string()),
         provider: defaults.provider,
         model: defaults.model,
-        yolo: defaults.yolo,
+        // Yolo is on by default — pass --no-yolo to opt out for a single run, or
+        // set AGENT_ROUTER_YOLO=false to opt out persistently.
+        yolo: defaults.yolo.unwrap_or(true),
         ..CliOptions::default()
     };
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--help" | "-h" => return Ok(CliAction::Help),
+            "--help" => return Ok(CliAction::Help),
+            // `-h <name>` is a harness shorthand (e.g. `-h cl`); bare `-h` is help.
+            "-h" => match args.peek() {
+                Some(next) if !next.starts_with('-') => {
+                    options.harness = args.next().unwrap();
+                }
+                _ => return Ok(CliAction::Help),
+            },
             "--version" | "-v" => return Ok(CliAction::Version),
             "--dry-run" => options.dry_run = true,
             "--yolo" => options.yolo = true,
@@ -182,16 +191,21 @@ pub(crate) fn usage() -> &'static str {
   par install list
 
 Options:
-  --harness <name>        claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, kimi, antigravity
+  --harness, -h <name>    claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, kimi, antigravity
+                          Shorthands: cl=claude co=codex cu=cursor g=gemini go=goose
+                          oc=opencode q=qwen k=kimi a/ai=aider aq=amazon-q cp=copilot ag=antigravity
   --provider <name>       Provider namespace when the target CLI supports one
   --model, -m <name>      Model name to pass through
   --agent <name>          Agent/persona name for harnesses that support it
   --output-format <fmt>   text, json, stream-json when supported by target
   --cwd <path>            Working directory for the target CLI
-  --yolo                  Add the harness-specific permission bypass flag where supported
-  --no-yolo               Disable a persisted yolo default for this run
+  --no-yolo               Yolo (permission bypass) is ON by default; this opts out for the run
+  --yolo                  Explicitly enable yolo (already the default)
   --dry-run               Print the routed command as JSON
   --                      Pass remaining flags through to the target CLI
+
+  Note: -h <name> selects a harness; bare -h (no value) prints this help.
+  Examples: par -h cl \"review\"   par -h co -m gpt-5.4 \"fix tests\"   par -h k
 
 Defaults:
   default [name]          Show or set the persisted default harness
@@ -439,7 +453,7 @@ mod tests {
             harness: None,
             provider: None,
             model: None,
-            yolo: false,
+            yolo: None,
         }
     }
 
@@ -457,9 +471,36 @@ mod tests {
                 harness: "claude".to_string(),
                 prompt: Some("hello".to_string()),
                 model: Some("sonnet".to_string()),
+                yolo: true,
                 ..CliOptions::default()
             }))
         );
+    }
+
+    #[test]
+    fn yolo_on_by_default_and_opt_out() {
+        let on = parse_args(["-p", "hi"].map(String::from), defaults()).unwrap();
+        let CliAction::Run(opts) = on else { panic!() };
+        assert!(opts.yolo);
+
+        let off = parse_args(["--no-yolo", "-p", "hi"].map(String::from), defaults()).unwrap();
+        let CliAction::Run(opts) = off else { panic!() };
+        assert!(!opts.yolo);
+    }
+
+    #[test]
+    fn dash_h_is_harness_shorthand() {
+        let action = parse_args(["-h", "k", "-p", "hi"].map(String::from), defaults()).unwrap();
+        let CliAction::Run(opts) = action else {
+            panic!("expected run action");
+        };
+        assert_eq!(opts.harness, "k");
+    }
+
+    #[test]
+    fn bare_dash_h_is_help() {
+        let action = parse_args(["-h"].map(String::from), defaults()).unwrap();
+        assert_eq!(action, CliAction::Help);
     }
 
     #[test]

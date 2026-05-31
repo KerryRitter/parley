@@ -231,11 +231,10 @@ pub(crate) fn add_yolo_args(
 
     let spec = spec_for_harness(&request.harness)
         .ok_or_else(|| format!("unknown harness \"{}\"", request.harness))?;
+    // Yolo is on by default; a harness with no known bypass flag simply runs
+    // without one rather than failing the whole invocation.
     if spec.yolo_args.is_empty() {
-        return Err(format!(
-            "harness \"{}\" does not have a known yolo flag",
-            request.harness
-        ));
+        return Ok(args);
     }
     args.extend(spec.yolo_args.iter().map(|arg| (*arg).to_string()));
     Ok(args)
@@ -270,6 +269,20 @@ fn merge_prompt(piped_input: &str, prompt: Option<&str>) -> Option<String> {
 
 pub(crate) fn normalize_harness(harness: &str) -> String {
     match harness.to_ascii_lowercase().as_str() {
+        // Two-letter shorthands (e.g. `par -h cl`).
+        "cl" => "claude".to_string(),
+        "co" => "codex".to_string(),
+        "cu" => "cursor".to_string(),
+        "g" => "gemini".to_string(),
+        "go" => "goose".to_string(),
+        "oc" => "opencode".to_string(),
+        "q" => "qwen".to_string(),
+        "k" => "kimi".to_string(),
+        "a" | "ai" => "aider".to_string(),
+        "aq" => "amazon-q".to_string(),
+        "cp" => "copilot".to_string(),
+        "ag" => "antigravity".to_string(),
+        // Long aliases.
         "cursor-agent" => "cursor".to_string(),
         "open-code" => "opencode".to_string(),
         "google" | "google-gemini" => "gemini".to_string(),
@@ -377,6 +390,16 @@ mod tests {
         assert_eq!(normalize_harness("cursor-agent"), "cursor");
         assert_eq!(normalize_harness("aws-q"), "amazon-q");
         assert_eq!(normalize_harness("agy"), "antigravity");
+    }
+
+    #[test]
+    fn normalizes_short_harness_codes() {
+        assert_eq!(normalize_harness("cl"), "claude");
+        assert_eq!(normalize_harness("co"), "codex");
+        assert_eq!(normalize_harness("oc"), "opencode");
+        assert_eq!(normalize_harness("k"), "kimi");
+        assert_eq!(normalize_harness("cu"), "cursor");
+        assert_eq!(normalize_harness("aq"), "amazon-q");
     }
 
     #[test]
