@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use super::project::ProjectConfig;
+use super::util::{clean_generated_skills, skill_dir_name, truncate, GENERATED_MARKER};
 
 pub(crate) fn write(
     root: &Path,
@@ -87,23 +88,11 @@ fn write_agents_skills(
     }
 
     if !dry_run {
-        let skills_dir = root.join(".agents/skills");
-        if skills_dir.exists() {
-            let entries = fs::read_dir(&skills_dir)
-                .map_err(|e| format!("failed to read .agents/skills: {e}"))?;
-            for entry in entries {
-                let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("source-command-") && entry.path().is_dir() {
-                    fs::remove_dir_all(entry.path())
-                        .map_err(|e| format!("failed to remove skill dir: {e}"))?;
-                }
-            }
-        }
+        clean_generated_skills(&root.join(".agents/skills"))?;
     }
 
     for cmd in &config.commands {
-        let skill_name = codex_skill_name(&cmd.name);
+        let skill_name = skill_dir_name(&cmd.name);
         let command_name = format!("/{}", cmd.name);
         let desc = if cmd.description.starts_with("Run ") {
             cmd.description.clone()
@@ -113,8 +102,9 @@ fn write_agents_skills(
         let desc = truncate(&desc, 240);
 
         let skill_content = format!(
-            "---\nname: {skill_name}\ndescription: |\n  {desc}\n---\n\n# {command_name}\n\nUse this skill when the user asks to run `{command_name}`.\n\n{}\n",
+            "---\nname: {skill_name}\ndescription: |\n  {desc}\n# {GENERATED_MARKER}\n---\n\n# {command_name}\n\nUse this skill when the user asks to run `{command_name}`.\n\n{}\n",
             cmd.body.trim(),
+            GENERATED_MARKER = GENERATED_MARKER,
         );
 
         write_file(
@@ -127,34 +117,6 @@ fn write_agents_skills(
     }
 
     Ok(())
-}
-
-fn codex_skill_name(name: &str) -> String {
-    let raw = format!("source-command-{}", slugify(name));
-    if raw.len() <= 64 {
-        raw
-    } else {
-        raw[..64].trim_end_matches('-').to_string()
-    }
-}
-
-fn slugify(value: &str) -> String {
-    value
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    format!("{}...", s[..max - 3].trim_end())
 }
 
 fn write_file(

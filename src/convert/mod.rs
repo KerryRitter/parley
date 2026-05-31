@@ -2,10 +2,13 @@ mod antigravity;
 mod claude;
 mod codex;
 mod cursor;
+mod frontmatter;
 mod gemini;
 mod kimi;
+mod links;
 mod opencode;
 pub(crate) mod project;
+mod util;
 
 use std::env;
 use std::path::PathBuf;
@@ -37,12 +40,16 @@ pub(crate) fn run_convert(options: ConvertOptions) -> Result<(), String> {
 
     let config = read_source(&root, &source)?;
     println!(
-        "  read: {} commands, {} skills, {} references, {} MCP servers",
+        "  read: {} commands, {} skills, {} personas, {} references, {} MCP servers",
         config.commands.len(),
         config.skills.len(),
+        config.personas.len(),
         config.references.len(),
         config.mcp_servers.len(),
     );
+
+    let (resolved, unresolved) = links::resolve_project(&config);
+    println!("{}\n", links::format_report(resolved, &unresolved));
 
     let targets = resolve_targets(&options.to, &source)?;
     println!("  targets: {}\n", targets.join(", "));
@@ -60,6 +67,13 @@ pub(crate) fn run_convert(options: ConvertOptions) -> Result<(), String> {
     }
 
     println!("\n=== Done ===");
+
+    if !unresolved.is_empty() {
+        return Err(format!(
+            "{} unresolved cross-reference(s) — see report above. Fix the source pack, then re-run.",
+            unresolved.len()
+        ));
+    }
     Ok(())
 }
 
@@ -266,21 +280,22 @@ mod tests {
         assert!(files.contains(&".codex/config.toml".to_string()));
         assert!(files.iter().any(|f| f.contains(".agents/skills/")));
 
-        // Verify SKILL.md format
+        // Verify SKILL.md format (no source-command- prefix; marker present)
         let skill = fs::read_to_string(
-            tmp.path().join(".agents/skills/source-command-dev/SKILL.md"),
+            tmp.path().join(".agents/skills/dev/SKILL.md"),
         )
         .unwrap();
-        assert!(skill.starts_with("---\nname: source-command-dev\n"));
+        assert!(skill.starts_with("---\nname: dev\n"));
         assert!(skill.contains("description: |"));
+        assert!(skill.contains("par-convert:generated"));
         assert!(skill.contains("Run the dev server."));
 
-        // Skill name matches directory
+        // Skill name matches directory (path-slugged, prefix dropped)
         let skill_git = fs::read_to_string(
-            tmp.path().join(".agents/skills/source-command-git-merge/SKILL.md"),
+            tmp.path().join(".agents/skills/git-merge/SKILL.md"),
         )
         .unwrap();
-        assert!(skill_git.contains("name: source-command-git-merge\n"));
+        assert!(skill_git.contains("name: git-merge\n"));
 
         // No plugin system files
         assert!(!tmp.path().join(".agents/plugins").exists());
@@ -363,11 +378,12 @@ mod tests {
         assert!(!tmp.path().join("KIMI.md").exists());
 
         let skill = fs::read_to_string(
-            tmp.path().join(".kimi/skills/source-command-dev/SKILL.md"),
+            tmp.path().join(".kimi/skills/dev/SKILL.md"),
         )
         .unwrap();
-        assert!(skill.contains("name: source-command-dev\n"));
+        assert!(skill.contains("name: dev\n"));
         assert!(skill.contains("description: |"));
+        assert!(skill.contains("par-convert:generated"));
     }
 
     #[test]
