@@ -24,10 +24,10 @@ impl Harness for KimiHarness {
             }
         }
 
-        // Kimi only auto-loads MCP from ~/.kimi/mcp.json (global). `par convert`
-        // writes the project's MCP config to ./.kimi/mcp.json, which Kimi ignores
-        // unless pointed at it. Load it explicitly when present so project MCP
-        // servers (e.g. the ones generated from .mcp.json) are available.
+        // Kimi only auto-loads MCP from ~/.kimi/mcp.json (global). Point it at the
+        // project's MCP config so project servers are available: prefer the
+        // Kimi-specific ./.kimi/mcp.json (written by `par convert`), else fall back
+        // to the standard ./.mcp.json — same `{mcpServers:{...}}` shape Kimi accepts.
         if let Some(mcp_path) = project_mcp_config(request) {
             args.push("--mcp-config-file".to_string());
             args.push(mcp_path.to_string_lossy().to_string());
@@ -38,13 +38,17 @@ impl Harness for KimiHarness {
     }
 }
 
-/// Path to the project-level Kimi MCP config (`<cwd>/.kimi/mcp.json`) if it
-/// exists, else `None`. Resolves relative to the request's cwd (or the process
-/// cwd when unset).
+/// Path to the project-level MCP config: prefers `<cwd>/.kimi/mcp.json`, falling
+/// back to the standard `<cwd>/.mcp.json`. Returns the first that exists, else
+/// `None`. Resolves relative to the request's cwd (or the process cwd when unset).
 fn project_mcp_config(request: &Request) -> Option<PathBuf> {
-    let base = request.cwd.as_deref().unwrap_or(".");
-    let path = Path::new(base).join(".kimi").join("mcp.json");
-    path.exists().then_some(path)
+    let base = Path::new(request.cwd.as_deref().unwrap_or("."));
+    let kimi = base.join(".kimi").join("mcp.json");
+    if kimi.exists() {
+        return Some(kimi);
+    }
+    let standard = base.join(".mcp.json");
+    standard.exists().then_some(standard)
 }
 
 #[cfg(test)]
@@ -90,6 +94,39 @@ mod tests {
             "missing flag in {joined}"
         );
         assert!(joined.contains(".kimi/mcp.json"), "missing path in {joined}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn falls_back_to_standard_mcp_json_when_kimi_absent() {
+        let dir = temp_dir("fallback");
+        fs::write(dir.join(".mcp.json"), "{\"mcpServers\":{}}").unwrap();
+
+        let invocation = build(&dir, "go");
+        let joined = invocation.args.join(" ");
+        assert!(
+            invocation.args.iter().any(|a| a == "--mcp-config-file"),
+            "missing flag in {joined}"
+        );
+        assert!(
+            joined.contains(".mcp.json") && !joined.contains(".kimi"),
+            "expected standard .mcp.json path in {joined}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefers_kimi_mcp_over_standard() {
+        let dir = temp_dir("prefer");
+        fs::create_dir_all(dir.join(".kimi")).unwrap();
+        fs::write(dir.join(".kimi/mcp.json"), "{\"mcpServers\":{}}").unwrap();
+        fs::write(dir.join(".mcp.json"), "{\"mcpServers\":{}}").unwrap();
+
+        let invocation = build(&dir, "go");
+        let joined = invocation.args.join(" ");
+        assert!(joined.contains(".kimi/mcp.json"), "expected .kimi path in {joined}");
 
         let _ = fs::remove_dir_all(&dir);
     }
