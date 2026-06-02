@@ -209,6 +209,55 @@ brew install par
 
 That should install the same release binary and provide `par` as the primary CLI name.
 
+## TypeScript SDK
+
+This repository also contains a publishable TypeScript SDK for TypeScript CLIs:
+
+```text
+packages/typescript/
+```
+
+The SDK exposes the same routing model as the Rust CLI:
+
+```ts
+import { buildInvocation, runAgent } from "programmatic-agent-router-sdk";
+
+const invocation = buildInvocation({
+  harness: "opencode",
+  provider: "anthropic",
+  model: "claude-sonnet-4-6",
+  prompt: "review this branch",
+});
+
+const result = await runAgent({
+  harness: "codex",
+  model: "gpt-5.4",
+  prompt: "summarize this repository",
+});
+```
+
+Validate the SDK:
+
+```sh
+cd packages/typescript
+npm install
+npm run validate
+```
+
+Publish dry run:
+
+```sh
+cd packages/typescript
+npm pack --dry-run
+```
+
+Publish when ready:
+
+```sh
+cd packages/typescript
+npm publish --access public
+```
+
 ## Quick Start
 
 Default harness is `claude`:

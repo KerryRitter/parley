@@ -1,4 +1,7 @@
 /target/
+node_modules/
+dist/
+*.tgz
 *.log
 *.tmp
 agent-router
