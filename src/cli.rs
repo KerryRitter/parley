@@ -20,6 +20,36 @@ pub(crate) struct CliOptions {
     pub yolo: bool,
 }
 
+/// Options for `par resume` — browse and resume sessions across harnesses,
+/// scoped to a working directory.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResumeOptions {
+    /// Restrict to one harness (shorthands allowed, e.g. `k` → kimi, `cl` → claude).
+    pub harness: Option<String>,
+    /// A 1-based list index or a raw session id.
+    pub selector: Option<String>,
+    pub cwd: Option<String>,
+    /// Resume the newest match without prompting.
+    pub latest: bool,
+    /// Print the listing and exit (no resume).
+    pub list: bool,
+    /// With `--list`, emit JSON instead of a human table.
+    pub json: bool,
+    /// Print the resolved resume command instead of running it.
+    pub print: bool,
+    /// Append the harness's permission-bypass flag to the resume command.
+    pub yolo: bool,
+}
+
+/// Options for `par mcp`. With no subcommand it runs the stdio server;
+/// `par mcp connect -h <harness>` registers this server into a harness.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct McpOptions {
+    /// `Some(harness)` => register `par mcp` into that harness; `None` => serve.
+    pub connect: Option<String>,
+    pub dry_run: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CliAction {
     Help,
@@ -29,6 +59,8 @@ pub(crate) enum CliAction {
     Install(InstallOptions),
     Update(UpdateOptions),
     Convert(ConvertOptions),
+    Resume(ResumeOptions),
+    Mcp(McpOptions),
     Run(Box<CliOptions>),
 }
 
@@ -79,6 +111,14 @@ where
         Some("convert") => {
             args.next();
             return parse_convert_args(args);
+        }
+        Some("resume") => {
+            args.next();
+            return parse_resume_args(args);
+        }
+        Some("mcp") => {
+            args.next();
+            return parse_mcp_args(args);
         }
         _ => {}
     }
@@ -242,6 +282,27 @@ Convert:
 
   Supported sources: claude
   Supported targets: gemini, codex, antigravity, opencode, cursor, kimi
+
+Resume:
+  par resume                      List sessions for this folder (any agent), pick one to resume
+  par resume -h cl                Resume a claude session in this folder (picker if several)
+  par resume -h co --latest       Resume the newest codex session, no prompt
+  par resume --list               Print resumable sessions, do not resume
+  par resume --list --json        Machine-readable listing
+  par resume -h cl <id> --print   Print the resume command for a session id
+  par resume --cwd <path>         Scope to another directory
+
+  Native listing: claude, codex, opencode. Delegate resume (best-effort listing,
+  marked ~): cursor, gemini — resume runs the native CLI's own cwd-scoped resume.
+
+MCP:
+  par mcp                         Run the stdio MCP server (JSON-RPC over stdin/stdout)
+                                  Tools: list_sessions, get_last_session, resume_command
+  par mcp connect -h cl           Register this server into a harness (runs its native mcp add)
+  par mcp connect -h oc           opencode/others may open their own add TUI
+  par mcp connect -h cu           cursor has no add command; merges ~/.cursor/mcp.json
+  par mcp connect -h cl --dry-run Show what would run / be written, change nothing
+                                  Supported: claude, codex, gemini, opencode, cursor
 
 Environment defaults:
   AGENT_ROUTER_HARNESS, AGENT_ROUTER_PROVIDER, AGENT_ROUTER_MODEL, AGENT_ROUTER_YOLO
@@ -430,6 +491,107 @@ where
     }))
 }
 
+fn parse_resume_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let mut options = ResumeOptions::default();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" => return Ok(CliAction::Help),
+            // `-h <name>` selects a harness filter (mirrors the run path);
+            // bare `-h` prints help.
+            "-h" => match args.peek() {
+                Some(next) if !next.starts_with('-') => options.harness = args.next(),
+                _ => return Ok(CliAction::Help),
+            },
+            "--harness" => options.harness = Some(require_value(&mut args, "--harness")?),
+            "--cwd" => options.cwd = Some(require_value(&mut args, "--cwd")?),
+            "--latest" | "--last" => options.latest = true,
+            "--list" | "--ls" => options.list = true,
+            "--json" => options.json = true,
+            "--print" => options.print = true,
+            "--yolo" => options.yolo = true,
+            "--no-yolo" => options.yolo = false,
+            _ if arg.starts_with("--harness=") => {
+                options.harness = Some(value_after_equals(&arg, "--harness="))
+            }
+            _ if arg.starts_with("--cwd=") => {
+                options.cwd = Some(value_after_equals(&arg, "--cwd="))
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown resume option: {arg}")),
+            _ => {
+                if options.selector.is_none() {
+                    options.selector = Some(arg);
+                } else {
+                    return Err(format!("unexpected argument: {arg}"));
+                }
+            }
+        }
+    }
+
+    Ok(CliAction::Resume(options))
+}
+
+fn parse_mcp_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    if args.peek().map(String::as_str) == Some("connect") {
+        args.next();
+        return parse_mcp_connect_args(args);
+    }
+
+    // Plain `par mcp` — run the server.
+    let rest: Vec<String> = args.collect();
+    if rest.iter().any(|a| a == "--help" || a == "-h") {
+        return Ok(CliAction::Help);
+    }
+    if let Some(arg) = rest.first() {
+        return Err(format!("unknown mcp option: {arg}"));
+    }
+    Ok(CliAction::Mcp(McpOptions::default()))
+}
+
+fn parse_mcp_connect_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let mut harness = None;
+    let mut dry_run = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" => return Ok(CliAction::Help),
+            "-h" => match args.peek() {
+                Some(next) if !next.starts_with('-') => harness = args.next(),
+                _ => return Ok(CliAction::Help),
+            },
+            "--harness" => harness = Some(require_value(&mut args, "--harness")?),
+            "--dry-run" => dry_run = true,
+            _ if arg.starts_with("--harness=") => {
+                harness = Some(value_after_equals(&arg, "--harness="))
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown mcp connect option: {arg}")),
+            // Bare harness name, e.g. `par mcp connect claude`.
+            _ if harness.is_none() => harness = Some(arg),
+            _ => return Err(format!("unexpected argument: {arg}")),
+        }
+    }
+
+    let harness = harness.ok_or(
+        "mcp connect requires a harness: par mcp connect -h <claude|codex|gemini|opencode|cursor>",
+    )?;
+    Ok(CliAction::Mcp(McpOptions {
+        connect: Some(harness),
+        dry_run,
+    }))
+}
+
 fn require_value<I>(args: &mut std::iter::Peekable<I>, flag: &str) -> Result<String, String>
 where
     I: Iterator<Item = String>,
@@ -590,8 +752,7 @@ mod tests {
 
     #[test]
     fn parses_convert_positional_target() {
-        let action =
-            parse_args(["convert", "opencode"].map(String::from), defaults()).unwrap();
+        let action = parse_args(["convert", "opencode"].map(String::from), defaults()).unwrap();
 
         assert_eq!(
             action,

@@ -4,8 +4,10 @@ mod convert;
 mod harness;
 mod installer;
 mod json;
+mod mcp;
 mod model;
 mod process;
+mod session;
 
 use std::env;
 use std::io::{self, IsTerminal, Read, Write};
@@ -40,6 +42,11 @@ fn run() -> Result<(), String> {
         CliAction::Default(command) => config::run_default_command(command),
         CliAction::Shims(options) => harness::run_shims(options),
         CliAction::Convert(options) => convert::run_convert(options),
+        CliAction::Resume(options) => session::run_resume(options),
+        CliAction::Mcp(options) => match &options.connect {
+            Some(harness) => mcp::connect(harness, options.dry_run),
+            None => mcp::run(options),
+        },
         CliAction::Run(options) => {
             let stdin_text = read_stdin_if_piped()?;
             let request = Request::from_options(*options, stdin_text)?;

@@ -53,11 +53,68 @@ impl Json {
         }
     }
 
+    pub(crate) fn as_number(&self) -> Option<f64> {
+        match self {
+            Json::Number(n) => Some(*n),
+            _ => None,
+        }
+    }
+
     pub(crate) fn to_pretty_string(&self) -> String {
         let mut buf = String::new();
         write_pretty(&mut buf, self, 0);
         buf.push('\n');
         buf
+    }
+
+    /// Single-line serialization with no embedded newlines. Required for
+    /// newline-delimited transports such as MCP's JSON-RPC over stdio.
+    pub(crate) fn to_compact_string(&self) -> String {
+        let mut buf = String::new();
+        write_compact(&mut buf, self);
+        buf
+    }
+}
+
+fn write_compact(buf: &mut String, value: &Json) {
+    match value {
+        Json::Null => buf.push_str("null"),
+        Json::Bool(b) => buf.push_str(if *b { "true" } else { "false" }),
+        Json::Number(n) => {
+            if *n == (*n as i64) as f64 {
+                buf.push_str(&(*n as i64).to_string());
+            } else {
+                buf.push_str(&n.to_string());
+            }
+        }
+        Json::Str(s) => {
+            buf.push('"');
+            buf.push_str(&escape_json(s));
+            buf.push('"');
+        }
+        Json::Array(arr) => {
+            buf.push('[');
+            for (i, item) in arr.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                write_compact(buf, item);
+            }
+            buf.push(']');
+        }
+        Json::Object(map) => {
+            buf.push('{');
+            for (i, (key, val)) in map.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                buf.push('"');
+                buf.push_str(&escape_json(key));
+                buf.push_str("\":");
+                write_compact(buf, val);
+            }
+            buf.push('}');
+        }
     }
 }
 
@@ -211,11 +268,7 @@ impl<'a> Parser<'a> {
                     Some(b'u') => {
                         let mut hex = String::with_capacity(4);
                         for _ in 0..4 {
-                            hex.push(
-                                self.next_byte()
-                                    .ok_or("incomplete unicode escape")?
-                                    as char,
-                            );
+                            hex.push(self.next_byte().ok_or("incomplete unicode escape")? as char);
                         }
                         let code = u32::from_str_radix(&hex, 16)
                             .map_err(|_| format!("invalid unicode escape: \\u{hex}"))?;

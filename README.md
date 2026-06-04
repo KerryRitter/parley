@@ -1,124 +1,202 @@
-# Programmatic Agent Router
+# par — Programmatic Agent Router
 
-`par` is a small Rust CLI that gives automation one stable prompt interface and routes the call to a local AI agent harness.
+**One prompt interface for every AI coding agent.**
 
-It is designed around the useful `claude -p "prompt"` style of workflow:
-
-```sh
-par -p "review this repository" --harness codex --model gpt-5.4
-par -p "fix the failing tests" --harness opencode --provider anthropic --model claude-sonnet-4-6
-git diff | par -p "review this patch" --harness goose --provider openai --model gpt-5.4
-```
-
-The router does not call model APIs directly. It starts an already-installed harness CLI, maps shared router flags into that harness's command surface, streams stdout/stderr, and exits with the child process status.
-
-## Why This Exists
-
-Programmatic agent CLIs all solve a similar problem, but their headless interfaces differ:
-
-- Claude Code uses `claude -p`.
-- Codex uses `codex exec`.
-- Cursor uses `cursor-agent -p`.
-- Gemini uses `gemini --prompt`.
-- Goose uses `goose run -t`.
-- OpenCode uses `opencode run`.
-- Aider uses `aider --message`.
-- Antigravity uses the `agy` CLI surface.
-
-That makes scripts brittle. Switching harnesses means editing commands, model flags, provider syntax, JSON output flags, and environment variables. `par` keeps scripts focused on intent:
+`par` is a small, dependency-free Rust CLI. You write `par -p "do the thing"`, and it routes the call to whichever local agent CLI you choose — Claude, Codex, Cursor, Gemini, Goose, OpenCode, Qwen, Aider, Amazon Q, Copilot, Kimi, or Antigravity.
 
 ```sh
-par --harness <name> --provider <provider> --model <model> -p "<task>"
+par -p "review this repository"                              # uses your default agent (claude)
+par -h co -m gpt-5.4 -p "fix the failing tests"             # codex
+git diff | par -h oc --provider anthropic -p "review this"  # opencode, with piped context
 ```
 
-The harness adapter owns the translation.
+It never calls a model API itself. It starts an already-installed agent CLI, translates shared flags into that agent's command surface, streams its output, and exits with its status.
 
-## Project Status
+### Why
 
-This is early, working infrastructure for local automation.
+Every agent CLI has a different headless interface — `claude -p`, `codex exec`, `gemini --prompt`, `goose run -t`, `opencode run`, `aider --message`. Switching agents means rewriting commands, model flags, provider syntax, and env vars. `par` keeps your scripts focused on intent and lets the adapter own the translation. Switch agents by changing one flag.
 
-Implemented:
-
-- Rust-native CLI with no runtime dependencies.
-- Shared `claude -p`-style prompt surface.
-- Harness factory pattern with isolated adapters.
-- Harness installers via `par install <harness>`.
-- Provider/model resolution layer.
-- Dry-run mode for deterministic routing tests.
-- Setup script that validates Rust, tests, linting, release build, and installed downstream harness CLIs.
-
-Not implemented yet:
-
-- GitHub Actions release builds.
-- Homebrew formula.
-- End-to-end smoke tests against every vendor CLI.
-- Stable semver contract for every harness mapping.
+---
 
 ## Install
 
-### Quick Install
+One command:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh
 ```
 
-This installs `par` into `~/.local/bin` and creates an `agent-router` compatibility alias.
-
-### Prerequisites
-
-You need Rust for source installs:
+This installs `par` into `~/.local/bin` (plus an `agent-router` alias). Make sure that directory is on your `PATH`:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+export PATH="$HOME/.local/bin:$PATH"
+par --version          # verify
 ```
 
-Make sure Cargo is available:
+> `par` routes to agent CLIs — it does not install them for you automatically. Install the agents you want with [`par install`](#install-agent-clis), or bring your own.
+
+### Other install methods
+
+**From source** (needs [Rust](https://sh.rustup.rs)):
 
 ```sh
-cargo --version
+git clone https://github.com/KerryRitter/programmatic-agent-router.git
+cd programmatic-agent-router
+scripts/setup.sh --install        # validates, then `cargo install --path . --force`
 ```
 
-The setup script will also find Cargo at `~/.cargo/bin` even if that directory has not been added to your shell `PATH` yet.
+This creates `~/.local/bin/par` and `~/.local/bin/agent-router -> par`. Ensure both `~/.cargo/bin` and `~/.local/bin` are on your `PATH`.
 
-### Validate the System
+**Direct from GitHub:**
 
 ```sh
-scripts/setup.sh
+cargo install --git https://github.com/KerryRitter/programmatic-agent-router.git --branch main --force
 ```
 
-This checks:
-
-- Repository layout.
-- `cargo` and `rustc`.
-- `cargo fmt --check`.
-- `cargo test`.
-- `cargo clippy --all-targets -- -D warnings`.
-- `cargo build --release`.
-- Which supported downstream harness CLIs are installed.
-
-Use strict harness validation if this machine should already have at least one supported agent CLI:
+**Install-script options** (append after `sh -s --`):
 
 ```sh
-scripts/setup.sh --strict-harnesses
+... | sh -s -- --install-dir /usr/local/bin   # custom location
+... | sh -s -- --from-source                  # force a source build
+... | sh -s -- --from-source --git-protocol ssh
+... | sh -s -- --no-agent-router              # skip the agent-router alias
 ```
 
-## Install Harness CLIs
+The script installs a prebuilt release binary for your platform when available, and falls back to a source build otherwise. (Release-binary and Homebrew distribution are planned; see [Release Plan](#release-plan).)
 
-`par` can install supported downstream harness CLIs:
+---
+
+## What par can do
+
+| Command | Capability |
+| --- | --- |
+| [`par -p "..."`](#run-a-prompt) | Route a prompt to any agent, with one shared flag set |
+| [`par default <agent>`](#set-a-default-agent) | Pick the default agent (and options) for this machine |
+| [`par install <agent>`](#install-agent-clis) | Install a downstream agent CLI |
+| [`par shims install`](#shims) | Create `claudey` / `codexy` one-shot shortcuts |
+| [`par convert`](#convert--share-one-config-across-agents) | Port your `.claude/` config to every other agent |
+| [`par resume`](#resume--continue-a-past-session-from-any-agent) | Browse & resume past sessions across all agents, scoped to the folder |
+| [`par mcp`](#mcp--expose-resume-to-other-agents) | Run an MCP server so other agents can pick up your last conversation |
+
+---
+
+## Run a prompt
 
 ```sh
-par install list
-par install claude
-par install codex
-par install antigravity
-par install --dry-run all
+par                                    # launch the default agent interactively
+par -p "summarize this repository"     # one-shot prompt
+par -h co -m gpt-5.4 -p "add tests"    # choose an agent + model
+git diff | par -p "review this patch"  # pipe context in
+par -p "review src" --dry-run          # print the routed command instead of running it
 ```
 
-The installer registry is intentionally transparent: `--dry-run` prints the exact upstream install command without executing it. For harnesses that do not expose a stable terminal one-liner, such as Amazon Q, `par install <name>` prints the official install page and verification command instead of guessing.
+**Choosing the agent** — `-h` / `--harness` takes a full name or a short code:
 
-Current installer coverage:
+| Code | Agent | Code | Agent | Code | Agent |
+| --- | --- | --- | --- | --- | --- |
+| `cl` | claude | `g` | gemini | `q` | qwen |
+| `co` | codex | `go` | goose | `a` / `ai` | aider |
+| `cu` | cursor | `oc` | opencode | `aq` | amazon-q |
+| `cp` | copilot | `k` | kimi | `ag` | antigravity |
 
-| Harness | Installer |
+```sh
+par -h cl "review this"
+par -h co -m gpt-5.4 "fix tests"
+par -h k -p "drain the queue"
+```
+
+> Bare `-h` (no value) prints help; `-h <name>` selects an agent.
+
+### Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `-p`, `--prompt`, `--print` | Prompt text (`--print` is accepted for Claude compatibility). |
+| `-h`, `--harness <name>` | Target agent. Defaults to `claude`. Accepts short codes. |
+| `--provider <name>` | Provider namespace, when the agent uses provider-qualified models or env config. |
+| `-m`, `--model <name>` | Model name. |
+| `--agent <name>` | Agent/persona/profile, where supported. |
+| `--output-format <fmt>` | Output mode (e.g. `json`), where supported. |
+| `--input-format <fmt>` | Claude-compatible input format. |
+| `--permission-mode <mode>` | Permission/sandbox mode, where supported. |
+| `--max-turns <n>` | Max agent turns, where supported. |
+| `--cwd <path>` | Working directory for the child process. |
+| `--yolo` / `--no-yolo` | Add / skip the agent's permission-bypass flag. **On by default.** |
+| `--dry-run` | Print the routed invocation as JSON; run nothing. |
+| `--version`, `-v` | Print version. |
+| `--help` | Print help. |
+| `--` | Pass everything after it straight to the agent CLI. |
+
+**Pass agent-specific flags** after `--`:
+
+```sh
+par -h cl -p "review this" -- --verbose
+par -h aider -p "fix lint" -- --yes --no-auto-commits
+```
+
+**How prompt input is resolved:**
+
+- No prompt and no stdin → launch the agent's interactive entrypoint.
+- stdin piped **and** `-p` given → stdin is placed before the prompt, blank line between.
+- stdin piped, no `-p` → stdin becomes the prompt.
+
+### Yolo (permission bypass) is on by default
+
+Every run adds the agent's permission-bypass flag (e.g. `--dangerously-skip-permissions` for Claude) so automation runs hands-off. Opt out per run with `--no-yolo`, or persistently with `AGENT_ROUTER_YOLO=false`. Agents with no known bypass flag (e.g. Amazon Q) simply run without one. **Opt out when running untrusted prompts or in sensitive directories.**
+
+### Set a default agent
+
+So you don't repeat `-h` every time:
+
+```sh
+par default codex            # set default agent
+par default claude --yolo    # set agent + persist yolo
+par default --no-yolo        # keep agent, disable yolo
+par default                  # show current defaults
+par default --path           # print the config file path
+par current                  # alias for showing defaults
+par list                     # list supported agent names
+```
+
+The default lives in `~/.config/par/default` (or `$XDG_CONFIG_HOME/par/default`; override with `PAR_DEFAULT_FILE`).
+
+### Environment defaults
+
+```sh
+export AGENT_ROUTER_HARNESS=codex
+export AGENT_ROUTER_PROVIDER=openai
+export AGENT_ROUTER_MODEL=gpt-5.4
+export AGENT_ROUTER_YOLO=true
+```
+
+### Shims
+
+Generate `*y` one-shot shortcuts for yolo-capable agents:
+
+```sh
+par shims install            # writes claudey, codexy, ... to ~/.local/bin
+claudey -p "work in this sandbox"
+codexy "work in this sandbox"
+```
+
+Override the location with `par shims install --dir <dir>` or `PAR_SHIM_DIR`. `par shims list` prints the generated names and commands.
+
+---
+
+## Install agent CLIs
+
+`par` can install the downstream agents it routes to:
+
+```sh
+par install list             # show installer coverage
+par install claude           # install one agent
+par install all              # install every supported agent
+par install --dry-run all    # print the exact upstream commands, run nothing
+```
+
+The registry is transparent — `--dry-run` prints the real upstream install command. Agents without a stable one-liner (e.g. Amazon Q) print the official install page and a verify command instead of guessing.
+
+| Agent | Installer |
 | --- | --- |
 | `claude` | `curl -fsSL https://claude.ai/install.sh \| bash` |
 | `codex` | `npm install -g @openai/codex` |
@@ -133,246 +211,88 @@ Current installer coverage:
 | `kimi` | `curl -LsSf https://code.kimi.com/install.sh \| bash` |
 | `antigravity` | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` |
 
-### Install from Source
+> `par` does not manage agent versions; each downstream CLI owns its own upgrade flow.
+
+---
+
+## Convert — share one config across agents
+
+`par convert` ports a Claude command/skill pack to other agents. Your `.claude/` directory (commands, skills, `agents/`, references), `CLAUDE.md`, and `.mcp.json` stay the **single source of truth**; convert generates each agent's native config from them.
 
 ```sh
-scripts/setup.sh --install
+par convert                       # claude -> all targets
+par convert --to kimi             # claude -> one target
+par convert --from claude --to codex
+par convert --dry-run             # show what would be written
+par convert --cwd path/to/project
 ```
 
-This runs validation, installs the binary with:
+**Source:** `claude`. **Targets:** `gemini`, `codex`, `antigravity`, `opencode`, `cursor`, `kimi`.
+
+What it does:
+
+- **Parses frontmatter** — real descriptions, per-command `model`, argument placeholders; strips the block from bodies.
+- **Reads** commands, skills, personas (`.claude/agents/`), references, and `.mcp.json`.
+- **Emits native artifacts per target** — e.g. `.kimi/skills/<name>/SKILL.md` + `.kimi/mcp.json`, `.codex/config.toml` + `.agents/skills/`, `.gemini/commands/*.toml` + `GEMINI.md`, `.cursor/rules/`, `.opencode/config.json`, plus `AGENTS.md`. MCP servers in `.mcp.json` are translated into each agent's format.
+- **Resolves cross-references** — every `/command`, `**skill** skill`, persona path, and reference path is checked against the pack. The run prints a resolution report and **exits non-zero if any reference dead-ends**, so a typo fails the convert instead of shipping a broken pack.
+
+Generated skills carry a `par-convert:generated` marker, so re-running replaces only its own output and never a hand-authored file. Commit `.claude/`; git-ignore the generated output. A typical `npm run sync:instructions` is just `par convert --from claude --to all`.
+
+---
+
+## Resume — continue a past session from any agent
+
+`par resume` browses and resumes sessions from **any** agent, scoped to the current directory — the same scoping every agent's own `--resume` uses. It reads the transcripts each agent already writes to disk; there are no extra files to maintain.
 
 ```sh
-cargo install --path . --force
+par resume                      # list this folder's sessions (any agent), pick one
+par resume -h cl                # resume a claude session here (picker if several)
+par resume -h co --latest       # resume the newest codex session, no prompt
+par resume --list               # print the listing, resume nothing
+par resume --list --json        # machine-readable listing
+par resume -h cl <id> --print   # print the resume command for a session id
+par resume --cwd path/to/proj   # scope to another directory
 ```
 
-and creates:
+A selector is either a list index (`par resume 2`) or a raw session id (`par resume -h cl <id>`). Add `--yolo` to append the agent's permission-bypass flag (off by default here, since resume drops into an interactive session).
+
+**Two tiers of support:**
+
+- **Native listing** — `claude`, `codex`, `opencode`. Read straight from disk (`~/.claude/projects/<slug>/`, `~/.codex/sessions/`, `~/.local/share/opencode/storage/session/`), matched on exact cwd, with title and recency. These show up in the cross-agent listing.
+- **Delegate resume** — `cursor`, `gemini`. Their stores are hash-scoped in a way `par` doesn't reproduce, but the binaries self-scope to the cwd. Listing is skipped (marked `~`); resume runs the agent's own cwd-scoped resume (`cursor-agent resume`, `gemini --resume latest`). `par resume -h cu` / `par resume -h g` work directly.
+
+---
+
+## MCP — expose resume to other agents
+
+`par mcp` runs a small [MCP](https://modelcontextprotocol.io) server over stdio (newline-delimited JSON-RPC 2.0), so any MCP-capable agent can ask about — and resume — sessions in the current directory. This is how you say *"pick up my last conversation from Claude"* while sitting in Codex.
+
+**Tools:**
+
+- `list_sessions {cwd?, harness?}` — resumable sessions for a directory, newest first.
+- `get_last_session {cwd?, harness?}` — the most recent session plus a ready-to-run resume command.
+- `resume_command {harness, id, cwd?, yolo?}` — build the native resume command for a session id (returned as text; the server never spawns an interactive agent inside the caller).
+
+**Register it into an agent** — `par mcp connect` runs whatever that agent needs:
 
 ```sh
-~/.local/bin/par
-~/.local/bin/agent-router -> ~/.local/bin/par
+par mcp connect -h cl           # claude   -> runs `claude mcp add -s user par -- <par> mcp`
+par mcp connect -h co           # codex    -> runs `codex mcp add par -- <par> mcp`
+par mcp connect -h g            # gemini   -> runs `gemini mcp add par <par> mcp`
+par mcp connect -h oc           # opencode -> opens its own interactive `opencode mcp add`
+par mcp connect -h cu           # cursor   -> merges ~/.cursor/mcp.json (no add command exists)
+par mcp connect -h cl --dry-run # show the exact command / file change, do nothing
 ```
 
-Make sure both Cargo's bin directory and `~/.local/bin` are on your `PATH`:
+`connect` registers the absolute path of the running `par`, so it works regardless of the caller's `PATH`. Agents with a native `mcp add` are invoked directly (some, like opencode, prompt in their own TUI); cursor has no add subcommand, so its config file is merged in place, preserving existing servers.
 
-```sh
-export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-```
+Then, from any registered agent: *"use par to pick up my last claude session here"* → the agent calls `get_last_session` and runs the returned `claude --resume <id>`.
 
-### Install from GitHub
+---
 
-The quick install command is:
+## Supported agents
 
-```sh
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh
-```
-
-The script tries to install a release binary for your platform first. Until release binaries exist, it falls back to:
-
-```sh
-cargo install --git https://github.com/KerryRitter/programmatic-agent-router.git --branch main --force
-```
-
-Useful options:
-
-```sh
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --install-dir /usr/local/bin
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --from-source
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --from-source --git-protocol ssh
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh -s -- --no-agent-router
-```
-
-### Install from a Release Binary
-
-The intended public release flow is to publish platform archives from CI:
-
-- `par-aarch64-apple-darwin.tar.gz`
-- `par-x86_64-apple-darwin.tar.gz`
-- `par-x86_64-unknown-linux-gnu.tar.gz`
-- `par-x86_64-pc-windows-msvc.zip`
-
-Then installation is:
-
-```sh
-tar -xzf par-x86_64-unknown-linux-gnu.tar.gz
-install -m 0755 par ~/.local/bin/par
-ln -sf ~/.local/bin/par ~/.local/bin/agent-router
-```
-
-### Homebrew Later
-
-A public distribution should add a tap:
-
-```sh
-brew tap <org>/tap
-brew install par
-```
-
-That should install the same release binary and provide `par` as the primary CLI name.
-
-## Quick Start
-
-Default harness is `claude`:
-
-```sh
-par
-par -p "summarize this repository"
-```
-
-Equivalent routed command:
-
-```sh
-claude
-claude -p "summarize this repository"
-```
-
-Use Codex:
-
-```sh
-par --harness codex --model gpt-5.4 -p "add parser tests"
-```
-
-Set the default harness on this machine:
-
-```sh
-par default codex
-par
-par -p "add parser tests"
-```
-
-Persist a default harness with permission bypass enabled:
-
-```sh
-par default claude --yolo
-par current
-```
-
-The default is stored in `~/.config/par/default`, or `$XDG_CONFIG_HOME/par/default` when `XDG_CONFIG_HOME` is set. Override the path with `PAR_DEFAULT_FILE`.
-
-Create shortcut scripts for yolo-capable harnesses:
-
-```sh
-par shims install
-claudey -p "work in this sandbox"
-codexy "work in this sandbox"
-```
-
-By default, shims are written to `~/.local/bin`. Override this with `par shims install --dir <dir>` or `PAR_SHIM_DIR`.
-
-Use OpenCode with provider-qualified model routing:
-
-```sh
-par \
-  --harness opencode \
-  --provider anthropic \
-  --model claude-sonnet-4-6 \
-  -p "review this branch"
-```
-
-Use Goose with environment-backed configuration:
-
-```sh
-par \
-  --harness goose \
-  --provider openai \
-  --model gpt-5.4 \
-  --permission-mode auto \
-  --max-turns 50 \
-  -p "fix the failing tests"
-```
-
-Pipe context:
-
-```sh
-git diff | par --harness aider -p "fix the problems in this patch"
-```
-
-Preview without execution:
-
-```sh
-par --harness qwen --model qwen3-coder-plus -p "review src" --dry-run
-```
-
-Pass harness-specific flags after `--`:
-
-```sh
-par --harness claude -p "review this" -- --verbose
-par --harness aider -p "fix lint" -- --yes --no-auto-commits
-```
-
-## CLI Reference
-
-```text
-par [options]
-par [options] [-p <prompt>] [positional prompt]
-```
-
-| Option | Purpose |
-| --- | --- |
-| `-p`, `--prompt`, `--print` | Prompt text. `--print` is accepted for Claude compatibility. |
-| `--harness`, `-h <name>` | Target CLI adapter. Defaults to `claude`. Accepts short codes (see below). Bare `-h` with no value prints help. |
-| `--provider <name>` | Provider namespace when the harness uses provider-qualified model names or env configuration. |
-| `--model`, `-m <name>` | Model name. |
-| `--agent <name>` | Agent/persona/profile where supported. |
-| `--output-format <fmt>` | Output mode where supported by the target harness. |
-| `--input-format <fmt>` | Claude-compatible input format. |
-| `--permission-mode <mode>` | Permission/sandbox mode where supported. |
-| `--max-turns <n>` | Maximum agent turns where supported. |
-| `--cwd <path>` | Working directory for the child process. |
-| `--yolo` | Explicitly add the harness-specific permission bypass flag. On by default. |
-| `--no-yolo` | Opt out of yolo for this run. Also set `AGENT_ROUTER_YOLO=false` to opt out persistently. |
-| `--dry-run` | Print the routed invocation as JSON. |
-| `--help` | Print help (also `-h` with no value). |
-| `--version`, `-v` | Print version. |
-| `--` | Pass all remaining args directly to the target CLI. |
-
-**Yolo is on by default.** Every run adds the target harness's permission-bypass flag (e.g. `--dangerously-skip-permissions` for Claude). Use `--no-yolo` per run, or `AGENT_ROUTER_YOLO=false` to disable persistently. Harnesses without a known bypass flag (e.g. Amazon Q) simply run without one.
-
-**Harness short codes** (`-h <code>`):
-
-| Code | Harness | Code | Harness | Code | Harness |
-| --- | --- | --- | --- | --- | --- |
-| `cl` | claude | `g` | gemini | `q` | qwen |
-| `co` | codex | `go` | goose | `a` / `ai` | aider |
-| `cu` | cursor | `oc` | opencode | `aq` | amazon-q |
-| `cp` | copilot | `k` | kimi | `ag` | antigravity |
-
-```sh
-par -h cl "review this"
-par -h co -m gpt-5.4 "fix tests"
-par -h k -p "drain the queue"
-```
-
-Environment defaults:
-
-```sh
-export AGENT_ROUTER_HARNESS=codex
-export AGENT_ROUTER_PROVIDER=openai
-export AGENT_ROUTER_MODEL=gpt-5.4
-export AGENT_ROUTER_YOLO=true
-```
-
-Persisted default commands:
-
-```sh
-par default                  # show persisted defaults
-par default codex --yolo     # set harness and yolo default
-par default --no-yolo        # keep harness, disable yolo
-par default --path           # print the default file path
-par current                  # alias for showing defaults
-par list                     # list supported harness names
-```
-
-This follows the useful part of `nvm`'s command shape: a default alias, `use`-style setter, `current`, and `list`. `par` does not manage installed versions; downstream CLIs still own their own install and upgrade flows.
-
-Prompt input rules:
-
-- If no prompt and no stdin are provided, `par` launches the default harness's interactive entrypoint.
-- If stdin is piped and `-p` is provided, stdin is placed before the prompt with a blank line between them.
-- If stdin is piped and no prompt is provided, stdin becomes the prompt.
-
-## Supported Harnesses
-
-| Harness | Aliases | Routed command |
+| Agent | Aliases | Routed command |
 | --- | --- | --- |
 | `claude` | `cl` | `claude -p "<prompt>"` |
 | `codex` | `co`, `openai` | `codex exec "<prompt>"` |
@@ -387,183 +307,96 @@ Prompt input rules:
 | `kimi` | `k`, `moonshot`, `kimi-code` | `kimi -p "<prompt>"` |
 | `antigravity` | `ag`, `agy`, `google-antigravity` | `agy "<prompt>"` |
 
-### Harness Details
+<details>
+<summary><b>Per-agent flag mappings</b></summary>
 
-Claude:
+**Claude** — `claude -p`. Supports `--model`, `--output-format`, `--input-format`, `--permission-mode`, `--max-turns`. Yolo → `--dangerously-skip-permissions`.
 
-- Uses `claude -p`.
-- Supports `--model`, `--output-format`, `--input-format`, `--permission-mode`, and `--max-turns`.
-- `--yolo` maps to `--dangerously-skip-permissions`.
+**Codex** — `codex exec`. `--output-format json|stream-json` → `--json`. Provider is preserved in `AGENT_ROUTER_PROVIDER` (Codex receives the plain model name). Yolo → `--dangerously-bypass-approvals-and-sandbox` for routed runs; the `codexy` shim uses `codex --yolo`.
 
-Codex:
+**Cursor** — `cursor-agent -p`. Plain `--model`; `--output-format` when accepted. Yolo → `--force` (required for print-mode file writes).
 
-- Uses `codex exec`.
-- `--output-format json` and `--output-format stream-json` map to `--json`.
-- Provider is currently preserved in `AGENT_ROUTER_PROVIDER` for future policy, but Codex receives the plain model name.
-- `--yolo` maps to `--dangerously-bypass-approvals-and-sandbox` for routed noninteractive runs. The `codexy` shim uses the shorter `codex --yolo` entrypoint.
+**Gemini** — `gemini --prompt`. Plain `--model`; `--output-format` when accepted. Yolo → `--yolo`.
 
-Cursor:
+**Goose** — `goose run -t`. `--provider`→`GOOSE_PROVIDER`, `--model`→`GOOSE_MODEL`, `--permission-mode`→`GOOSE_MODE`, `--max-turns`→`GOOSE_MAX_TURNS`, `--agent`→`--with-builtin`. Yolo sets `GOOSE_MODE=auto` unless `--permission-mode` is given.
 
-- Uses `cursor-agent -p`.
-- Supports plain `--model`.
-- Supports `--output-format` when accepted by the installed Cursor agent.
-- `--yolo` maps to `--force`, which Cursor requires for print-mode file writes.
+**OpenCode** — `opencode run`. `--provider anthropic --model claude-sonnet-4-6` → `--model anthropic/claude-sonnet-4-6`. `--output-format json|stream-json` → `--format json`. `--agent`→`--agent`. Yolo → `--dangerously-skip-permissions`.
 
-Gemini:
+**Qwen** — `qwen -p`. Plain `--model`; `--output-format` when accepted. Yolo → `--yolo`.
 
-- Uses `gemini --prompt`.
-- Supports plain `--model`.
-- Supports `--output-format` when accepted by the installed Gemini CLI.
-- `--yolo` maps to `--yolo`.
+**Aider** — `aider --message`. Provider+model joined for `--model` (e.g. `anthropic/claude-sonnet-4-6`). Use `--` for Aider flags like `--yes`. Yolo → `--yes-always`.
 
-Goose:
+**Amazon Q** — `q chat`. `--agent`→`--agent`. Model selection owned by Amazon Q config.
 
-- Uses `goose run -t`.
-- `--provider` maps to `GOOSE_PROVIDER`.
-- `--model` maps to `GOOSE_MODEL`.
-- `--permission-mode` maps to `GOOSE_MODE`.
-- `--max-turns` maps to `GOOSE_MAX_TURNS`.
-- `--agent <name>` maps to `goose run --with-builtin <name>`.
-- `--yolo` sets `GOOSE_MODE=auto` unless `--permission-mode` is provided.
+**Copilot** — provisional. `copilot -p`. Yolo → `--yolo`. Validate against the installed CLI before relying on it.
 
-OpenCode:
+**Kimi** — `kimi -p`. Plain `--model`, `--output-format`. Yolo → `--yolo`. Auto-loads project MCP: when `./.kimi/mcp.json` exists (relative to `--cwd` or the process cwd), the adapter adds `--mcp-config-file <cwd>/.kimi/mcp.json`, so the project config generated by `par convert` loads automatically.
 
-- Uses `opencode run`.
-- `--provider anthropic --model claude-sonnet-4-6` becomes `--model anthropic/claude-sonnet-4-6`.
-- `--output-format json` and `--output-format stream-json` map to `--format json`.
-- `--agent` maps to `--agent`.
-- `--yolo` maps to `--dangerously-skip-permissions`.
+**Antigravity** — experimental. Uses the `agy` command. Docs currently describe the interactive AGY CLI rather than a headless mode; the adapter passes the prompt and leaves version-specific flags to `--`. Yolo → `--dangerously-skip-permissions`.
 
-Qwen:
+</details>
 
-- Uses `qwen -p`.
-- Supports plain `--model`.
-- Supports `--output-format` when accepted by the installed Qwen CLI.
-- `--yolo` maps to `--yolo`.
+---
 
-Aider:
-
-- Uses `aider --message`.
-- Provider and model are joined for `--model`, such as `anthropic/claude-sonnet-4-6`.
-- Use `--` for Aider-specific automation flags, for example `--yes`.
-- `--yolo` maps to `--yes-always`.
-
-Amazon Q:
-
-- Uses `q chat`.
-- `--agent` maps to `--agent`.
-- Model selection is owned by Amazon Q CLI configuration.
-
-Copilot:
-
-- Provisional adapter.
-- Uses `copilot -p`.
-- `--yolo` maps to `--yolo`.
-- Validate against the installed CLI before relying on it in automation.
-
-Kimi:
-
-- Uses `kimi -p`.
-- Supports plain `--model` and `--output-format`.
-- `--yolo` maps to `--yolo`.
-- Auto-loads project MCP: when `./.kimi/mcp.json` exists (relative to `--cwd` or the process cwd), the adapter adds `--mcp-config-file <cwd>/.kimi/mcp.json`. Kimi otherwise only auto-discovers MCP from the global `~/.kimi/mcp.json`, so this makes the project config (generated by `par convert`) load automatically.
-
-Antigravity:
-
-- Experimental adapter.
-- Uses the `agy` command installed by Google Antigravity.
-- Official docs currently describe the interactive AGY CLI rather than a stable print/headless mode. The adapter passes the prompt to `agy` and leaves version-specific flags to `--`.
-- `--yolo` maps to `--dangerously-skip-permissions`.
-
-## Convert
-
-`par convert` ports a Claude command/skill pack to other harnesses. `.claude/` (commands, skills, agents, references), `CLAUDE.md`, and `.mcp.json` stay the **single source of truth**; convert generates each harness's native config from them.
+## Development
 
 ```sh
-par convert                       # claude -> all targets
-par convert --to kimi             # claude -> one target
-par convert --from claude --to codex
-par convert --dry-run             # show what would be written
-par convert --cwd path/to/project
+scripts/setup.sh                 # full local validation (fmt, test, clippy, release build, agent check)
+scripts/setup.sh --strict-harnesses   # also require at least one agent CLI installed
+scripts/setup.sh --install       # validate, then install the binary
 ```
 
-Supported source: `claude`. Targets: `gemini`, `codex`, `antigravity`, `opencode`, `cursor`, `kimi`.
+Direct commands:
 
-What it does:
+```sh
+cargo fmt
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo build --release
+cargo run -- -h oc --provider anthropic --model claude-sonnet-4-6 -p "review" --dry-run
+```
 
-- **Parses frontmatter** — real descriptions, per-command `model`, argument placeholders; strips the block from bodies.
-- **Reads commands, skills, personas (`.claude/agents/`), references, and `.mcp.json`.**
-- **Emits native artifacts per target** — e.g. `.kimi/skills/<name>/SKILL.md` + `.kimi/mcp.json`, `.codex/config.toml` + `.agents/skills/`, `.gemini/commands/*.toml` + `GEMINI.md`, `.cursor/rules/`, `.opencode/config.json`, plus `AGENTS.md`. MCP servers from `.mcp.json` are translated into each harness's format.
-- **Resolves cross-references** — every `/command`, `**skill** skill`, persona path, and reference path is checked against the pack. The run prints a resolution report and **exits non-zero if any reference dead-ends**, so a typo'd command or missing skill fails the convert instead of shipping a broken pack.
+Expected `--dry-run` shape:
 
-Generated skills carry a `par-convert:generated` marker so re-running convert replaces only its own output and never a hand-authored skill. Generated files are meant to be git-ignored — `.claude/` is what you commit. A typical `npm run sync:instructions` is just `par convert --from claude --to all`.
+```json
+{
+  "command": "opencode",
+  "args": ["run", "--model", "anthropic/claude-sonnet-4-6", "review"],
+  "env": {}
+}
+```
 
-Kimi invokes the generated skills as slash commands, e.g. `/skill:agent-queue dev`. See the Kimi harness notes above for MCP auto-loading.
-
-## Architecture
-
-The code is intentionally small and explicit.
+### Architecture
 
 ```text
 src/
-  main.rs              entrypoint, stdin handling, dry-run, process dispatch
-  cli.rs               shared command-line parser
+  main.rs              entrypoint, stdin handling, dry-run, dispatch
+  cli.rs               command-line parser
   model.rs             provider/model resolution
   process.rs           child process execution
-  harness/
-    mod.rs             Harness trait, Request, HarnessFactory
+  json.rs              zero-dep JSON parser/serializer (used by convert, session, mcp)
+  mcp.rs               stdio MCP server + `mcp connect` registration
+  harness/             per-agent adapters (claude, codex, cursor, gemini, goose,
+                       opencode, qwen, aider, amazon_q, copilot, kimi, antigravity)
+    mod.rs             Harness trait, Request, HarnessFactory, normalize_harness
     invocation.rs      command/args/env representation
-    claude.rs          Claude adapter
-    codex.rs           Codex adapter
-    cursor.rs          Cursor adapter
-    gemini.rs          Gemini adapter
-    goose.rs           Goose adapter
-    opencode.rs        OpenCode adapter
-    qwen.rs            Qwen adapter
-    aider.rs           Aider adapter
-    amazon_q.rs        Amazon Q adapter
-    antigravity.rs     Antigravity adapter
-    copilot.rs         provisional Copilot adapter
-    kimi.rs            Kimi adapter (auto-loads .kimi/mcp.json)
-  convert/
-    mod.rs             convert orchestration + report
-    claude.rs          reader for .claude/ packs
-    project.rs         parsed command/skill/persona model
-    frontmatter.rs     YAML frontmatter parser
-    links.rs           cross-reference resolver
-    util.rs            slug/truncate/skill helpers
-    gemini.rs codex.rs kimi.rs cursor.rs opencode.rs antigravity.rs   target writers
-  installer.rs         harness installer registry
+  convert/             .claude/ reader + per-target writers + cross-reference resolver
+  session/             cross-agent session discovery + resume
+    mod.rs             SessionStore trait, SessionRef, listing + resume
+    claude.rs codex.rs opencode.rs   native transcript parsers (cwd-scoped)
+    cursor.rs gemini.rs              delegate adapters (resume via native CLI)
+  installer.rs         agent installer registry
 ```
 
-Core types:
+**Design constraints:** no `sh -c` (adapters build argv directly); no hidden API calls (only starts local CLIs); no login handling (authenticate each agent separately); agent-specific behavior stays in its module; provider/model transforms stay centralized in `model.rs`; `--dry-run` output stays stable enough for tests.
 
-- `Request`: normalized router input.
-- `Invocation`: concrete command, args, and environment.
-- `Harness`: adapter trait implemented by each harness.
-- `HarnessFactory`: registry that maps harness names to adapter constructors.
-- `ModelFactory`: central place for provider/model normalization and formatting.
-- `installer.rs`: explicit upstream install commands for downstream harness CLIs.
+### Adding an agent
 
-Design constraints:
-
-- No `sh -c`; adapters build argv directly.
-- No hidden API calls; the router only starts local CLIs.
-- No login handling; authenticate each downstream harness separately.
-- Harness-specific behavior stays in that harness module.
-- Provider/model transformation stays centralized in `model.rs`.
-- `--dry-run` output should be stable enough for tests and shell debugging.
-
-## Adding a Harness
-
-1. Create `src/harness/<name>.rs`.
-2. Implement `Harness` for a small adapter struct.
-3. Register the adapter in `HarnessFactory::default()`.
-4. Add aliases in `normalize_harness()` if useful.
-5. Add dry-run tests for command, args, provider/model behavior, env vars, and passthrough.
-6. Document the harness and source docs in this README.
-
-Adapter skeleton:
+1. Create `src/harness/<name>.rs` and implement `Harness` for a small adapter struct.
+2. Register it in `HarnessFactory::default()`.
+3. Add aliases in `normalize_harness()` if useful.
+4. Add dry-run tests (command, args, provider/model, env, passthrough).
+5. Document it in this README.
 
 ```rust
 use super::{add_passthrough, plain_model, Harness, Invocation, Request};
@@ -577,113 +410,42 @@ struct ExampleHarness;
 impl Harness for ExampleHarness {
     fn build(&self, request: &Request) -> Result<Invocation, String> {
         let mut args = vec!["run".to_string(), request.prompt.clone()];
-
         if let Some(model) = plain_model(request) {
             args.extend(["--model".to_string(), model]);
         }
-
         Ok(Invocation::new("example", add_passthrough(args, request)))
     }
 }
 ```
 
-## Development
+---
 
-Run the full local validation:
+## Project status
 
-```sh
-scripts/setup.sh
-```
+Working infrastructure for local automation.
 
-Install after validation:
+**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run routing · cross-agent session resume + stdio MCP server · validating setup script.
 
-```sh
-scripts/setup.sh --install
-```
+**Not yet:** GitHub Actions release builds · Homebrew formula · end-to-end smoke tests against every vendor CLI · a stable semver contract per agent mapping.
 
-Common direct commands:
+### Release plan
 
-```sh
-cargo fmt
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo build --release
-```
+1. `scripts/setup.sh`.
+2. Smoke-test locally available CLIs with `--dry-run`.
+3. CI: `cargo fmt --check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, and release binaries for Linux/macOS/Windows (`par-<target>.tar.gz` / `.zip`).
+4. Add archive checksums, publish a GitHub release.
+5. Add a Homebrew tap once artifact names are stable.
 
-Try a dry run:
+---
 
-```sh
-cargo run -- --harness opencode --provider anthropic --model claude-sonnet-4-6 -p "review" --dry-run
-```
+## Security & privacy
 
-Expected dry-run shape:
+`par` does not inspect or redact prompt content. Anything passed via stdin or `-p` is forwarded to the selected agent, which may send it to its configured provider.
 
-```json
-{
-  "command": "opencode",
-  "args": ["run", "--model", "anthropic/claude-sonnet-4-6", "review"],
-  "env": {}
-}
-```
+**Yolo (permission bypass) is on by default** — each run adds the agent's bypass flag unless you pass `--no-yolo` or set `AGENT_ROUTER_YOLO=false`. This favors hands-off automation over sandboxing; opt out for untrusted prompts or sensitive directories. Use `--dry-run` to validate automation that may include secrets before running it.
 
-## Release Plan
+---
 
-Recommended first public release checklist:
+## Source notes
 
-1. Run `scripts/setup.sh`.
-2. Smoke-test installed CLIs that are available locally with `--dry-run`.
-3. Add GitHub Actions for:
-   - `cargo fmt --check`
-   - `cargo test`
-   - `cargo clippy --all-targets -- -D warnings`
-   - release binaries for Linux, macOS, and Windows
-4. Add archive checksums.
-5. Publish a GitHub release.
-6. Add a Homebrew tap once the release artifact names are stable.
-
-## Security and Privacy
-
-`par` does not inspect or redact prompt content. Anything passed to stdin or `-p` is forwarded to the selected harness. The selected harness may send that content to its configured provider.
-
-**Yolo (permission bypass) is on by default.** Each run adds the target harness's bypass flag unless you pass `--no-yolo` or set `AGENT_ROUTER_YOLO=false`. This favors hands-off automation over sandboxing — opt out when running untrusted prompts or in sensitive directories. Permission behavior is otherwise delegated to the downstream CLI; when a shared option like `--permission-mode` or `--yolo`/`--no-yolo` is mapped, it uses the target harness's command surface.
-
-Use `--dry-run` when validating automation that may include secrets or proprietary context.
-
-## Recommended Next Harnesses
-
-High priority:
-
-- `crush`: add once its one-shot/headless command surface is pinned.
-- `amp`: useful commercial harness, but verify whether it has a true non-interactive one-shot mode before adding.
-- `windsurf`: support only if/when the agent CLI exposes a stable non-interactive prompt command.
-
-Medium priority:
-
-- `qoder`, `trae`, `openclaw`, `droid`: support if they expose either ACP or a stable direct CLI.
-- `factory`: worth tracking if the local CLI is scriptable outside its hosted workflow.
-- `continue`, `cline`, `roo`, `kilo`: these are often extension-first rather than CLI-first; only add if there is a real headless command.
-
-Out of scope for now:
-
-- Web-only agents with no local CLI.
-- Interactive-only CLIs that block on a TTY.
-- Raw model providers where there is no agent harness. This project routes harnesses, not chat completions.
-
-## Source Notes
-
-This README was written against public docs checked on May 19, 2026:
-
-- [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) documents `claude -p` / `--print`.
-- [Codex exec mode docs](https://www.mintlify.com/openai/codex/advanced/exec-mode) document `codex exec`.
-- [Cursor CLI docs](https://docs.cursor.com/en/cli/using) document `cursor-agent -p` / `--print`.
-- [Gemini CLI docs](https://google-gemini.github.io/gemini-cli/docs/cli/) document `--prompt` / `-p`.
-- [OpenCode CLI docs](https://dev.opencode.ai/docs/cli/) document `opencode run`.
-- [Qwen Code CLI docs](https://qwenlm.github.io/qwen-code-docs/en/cli/index) document `qwen -p` / `--prompt`.
-- [Aider scripting docs](https://aider.chat/docs/scripting.html) document `aider --message`.
-- [Amazon Q Developer CLI reference](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-reference.html) documents `q chat --agent <name> "<prompt>"`.
-- [Goose headless docs](https://block.github.io/goose/docs/tutorials/headless-goose/) document `goose run -t`.
-- [Antigravity CLI docs](https://antigravity.google/docs/cli-using) document the `agy` CLI surface and configuration model.
-
-Installer commands are kept in `src/installer.rs` and checked against the official install docs where a stable one-liner exists. Amazon Q remains manual because the official AWS CLI docs point users through platform-specific installer flows rather than a single shell installer command.
-
-Re-check these command surfaces before a public release. Agent CLIs change fast.
+Written against public docs (checked May 19, 2026): [Claude](https://code.claude.com/docs/en/cli-reference), [Codex](https://www.mintlify.com/openai/codex/advanced/exec-mode), [Cursor](https://docs.cursor.com/en/cli/using), [Gemini](https://google-gemini.github.io/gemini-cli/docs/cli/), [OpenCode](https://dev.opencode.ai/docs/cli/), [Qwen](https://qwenlm.github.io/qwen-code-docs/en/cli/index), [Aider](https://aider.chat/docs/scripting.html), [Amazon Q](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-reference.html), [Goose](https://block.github.io/goose/docs/tutorials/headless-goose/), [Antigravity](https://antigravity.google/docs/cli-using). Installer commands live in `src/installer.rs`. Agent CLIs change fast — re-check these surfaces before a public release.
