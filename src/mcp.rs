@@ -177,7 +177,7 @@ fn initialize_result() -> Json {
         (
             "serverInfo",
             obj(vec![
-                ("name", Json::Str("par".to_string())),
+                ("name", Json::Str("parley".to_string())),
                 ("version", Json::Str(env!("CARGO_PKG_VERSION").to_string())),
             ]),
         ),
@@ -487,7 +487,7 @@ mod tests {
                 .get("serverInfo")
                 .and_then(|s| s.get("name"))
                 .and_then(Json::as_str),
-            Some("par")
+            Some("parley")
         );
         assert!(result
             .get("capabilities")

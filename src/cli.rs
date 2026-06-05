@@ -173,7 +173,7 @@ where
         provider: defaults.provider,
         model: defaults.model,
         // Yolo is on by default — pass --no-yolo to opt out for a single run, or
-        // set AGENT_ROUTER_YOLO=false to opt out persistently.
+        // set PARLEY_YOLO=false to opt out persistently.
         yolo: defaults.yolo.unwrap_or(true),
         ..CliOptions::default()
     };
@@ -369,7 +369,8 @@ MCP:
                                   Supported: claude, codex, gemini, opencode, cursor
 
 Environment defaults:
-  AGENT_ROUTER_HARNESS, AGENT_ROUTER_PROVIDER, AGENT_ROUTER_MODEL, AGENT_ROUTER_YOLO
+  PARLEY_HARNESS, PARLEY_PROVIDER, PARLEY_MODEL, PARLEY_YOLO
+  (legacy AGENT_ROUTER_* names still work)
 "
 }
 

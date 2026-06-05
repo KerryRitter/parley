@@ -1,8 +1,8 @@
-# par — Programmatic Agent Router
+# Parley
 
-**One prompt interface for every AI coding agent.**
+**One prompt interface for every AI coding agent — route, resume, bridge, and converse across them.**
 
-`par` is a small, dependency-free Rust CLI. You write `par -p "do the thing"`, and it routes the call to whichever local agent CLI you choose — Claude, Codex, Cursor, Gemini, Goose, OpenCode, Qwen, Aider, Amazon Q, Copilot, Kimi, or Antigravity.
+Parley is a small, dependency-free Rust CLI (the binary is `par`). You write `par -p "do the thing"`, and it routes the call to whichever local agent CLI you choose — Claude, Codex, Cursor, Gemini, Goose, OpenCode, Qwen, Aider, Amazon Q, Copilot, Kimi, or Antigravity — then lets those agents resume each other's sessions and even talk to one another.
 
 ```sh
 par -p "review this repository"                              # uses your default agent (claude)
@@ -144,7 +144,7 @@ par -h aider -p "fix lint" -- --yes --no-auto-commits
 
 ### Yolo (permission bypass) is on by default
 
-Every run adds the agent's permission-bypass flag (e.g. `--dangerously-skip-permissions` for Claude) so automation runs hands-off. Opt out per run with `--no-yolo`, or persistently with `AGENT_ROUTER_YOLO=false`. Agents with no known bypass flag (e.g. Amazon Q) simply run without one. **Opt out when running untrusted prompts or in sensitive directories.**
+Every run adds the agent's permission-bypass flag (e.g. `--dangerously-skip-permissions` for Claude) so automation runs hands-off. Opt out per run with `--no-yolo`, or persistently with `PARLEY_YOLO=false`. Agents with no known bypass flag (e.g. Amazon Q) simply run without one. **Opt out when running untrusted prompts or in sensitive directories.**
 
 ### Set a default agent
 
@@ -165,10 +165,11 @@ The default lives in `~/.config/par/default` (or `$XDG_CONFIG_HOME/par/default`;
 ### Environment defaults
 
 ```sh
-export AGENT_ROUTER_HARNESS=codex
-export AGENT_ROUTER_PROVIDER=openai
-export AGENT_ROUTER_MODEL=gpt-5.4
-export AGENT_ROUTER_YOLO=true
+export PARLEY_HARNESS=codex
+export PARLEY_PROVIDER=openai
+export PARLEY_MODEL=gpt-5.4
+export PARLEY_YOLO=true
+# legacy AGENT_ROUTER_* names are still honored as a fallback
 ```
 
 ### Shims
@@ -350,7 +351,7 @@ Then, from any registered agent: *"use par to pick up my last claude session her
 
 **Claude** — `claude -p`. Supports `--model`, `--output-format`, `--input-format`, `--permission-mode`, `--max-turns`. Yolo → `--dangerously-skip-permissions`.
 
-**Codex** — `codex exec`. `--output-format json|stream-json` → `--json`. Provider is preserved in `AGENT_ROUTER_PROVIDER` (Codex receives the plain model name). Yolo → `--dangerously-bypass-approvals-and-sandbox` for routed runs; the `codexy` shim uses `codex --yolo`.
+**Codex** — `codex exec`. `--output-format json|stream-json` → `--json`. Provider is preserved in `PARLEY_PROVIDER` (Codex receives the plain model name). Yolo → `--dangerously-bypass-approvals-and-sandbox` for routed runs; the `codexy` shim uses `codex --yolo`.
 
 **Cursor** — `cursor-agent -p`. Plain `--model`; `--output-format` when accepted. Yolo → `--force` (required for print-mode file writes).
 
@@ -482,7 +483,7 @@ Working infrastructure for local automation.
 
 `par` does not inspect or redact prompt content. Anything passed via stdin or `-p` is forwarded to the selected agent, which may send it to its configured provider.
 
-**Yolo (permission bypass) is on by default** — each run adds the agent's bypass flag unless you pass `--no-yolo` or set `AGENT_ROUTER_YOLO=false`. This favors hands-off automation over sandboxing; opt out for untrusted prompts or sensitive directories. Use `--dry-run` to validate automation that may include secrets before running it.
+**Yolo (permission bypass) is on by default** — each run adds the agent's bypass flag unless you pass `--no-yolo` or set `PARLEY_YOLO=false`. This favors hands-off automation over sandboxing; opt out for untrusted prompts or sensitive directories. Use `--dry-run` to validate automation that may include secrets before running it.
 
 ---
 

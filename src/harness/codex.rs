@@ -33,7 +33,7 @@ impl Harness for CodexHarness {
 
         let mut invocation = Invocation::new("codex", add_passthrough(args, request));
         if let Some(provider) = &request.provider {
-            invocation = invocation.with_env("AGENT_ROUTER_PROVIDER", provider);
+            invocation = invocation.with_env("PARLEY_PROVIDER", provider);
         }
         Ok(invocation)
     }

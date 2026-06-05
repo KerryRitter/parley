@@ -86,7 +86,7 @@ pub(crate) struct EnvDefaults {
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
     /// None = unset (yolo defaults on); Some(false) = an explicit opt-out via
-    /// AGENT_ROUTER_YOLO or a persisted `default --no-yolo`.
+    /// PARLEY_YOLO or a persisted `default --no-yolo`.
     pub(crate) yolo: Option<bool>,
 }
 
@@ -96,16 +96,19 @@ impl EnvDefaults {
         let selection = file.selection;
 
         Self {
-            harness: env::var("AGENT_ROUTER_HARNESS").ok().or(selection.harness),
-            provider: env::var("AGENT_ROUTER_PROVIDER")
-                .ok()
-                .or(selection.provider),
-            model: env::var("AGENT_ROUTER_MODEL").ok().or(selection.model),
-            yolo: env::var("AGENT_ROUTER_YOLO")
-                .ok()
+            harness: env_first("PARLEY_HARNESS", "AGENT_ROUTER_HARNESS").or(selection.harness),
+            provider: env_first("PARLEY_PROVIDER", "AGENT_ROUTER_PROVIDER").or(selection.provider),
+            model: env_first("PARLEY_MODEL", "AGENT_ROUTER_MODEL").or(selection.model),
+            yolo: env_first("PARLEY_YOLO", "AGENT_ROUTER_YOLO")
                 .and_then(|value| parse_bool(&value)),
         }
     }
+}
+
+/// Read `primary`, falling back to the legacy `AGENT_ROUTER_*` name for
+/// backward compatibility after the rename to Parley.
+fn env_first(primary: &str, legacy: &str) -> Option<String> {
+    env::var(primary).ok().or_else(|| env::var(legacy).ok())
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
