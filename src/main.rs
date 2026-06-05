@@ -1,6 +1,7 @@
 mod ask;
 mod cli;
 mod config;
+mod converse;
 mod convert;
 mod harness;
 mod installer;
@@ -45,6 +46,7 @@ fn run() -> Result<(), String> {
         CliAction::Convert(options) => convert::run_convert(options),
         CliAction::Resume(options) => session::run_resume(options),
         CliAction::Ask(options) => ask::run_cli(options),
+        CliAction::Converse(options) => converse::run_cli(options),
         CliAction::Mcp(options) => match &options.connect {
             Some(harness) => mcp::connect(harness, options.dry_run),
             None => mcp::run(options),

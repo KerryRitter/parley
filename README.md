@@ -77,6 +77,7 @@ The script installs a prebuilt release binary for your platform when available, 
 | [`par convert`](#convert--share-one-config-across-agents) | Port your `.claude/` config to every other agent |
 | [`par resume`](#resume--continue-a-past-session-from-any-agent) | Browse & resume past sessions across all agents, scoped to the folder |
 | [`par ask`](#ask--one-agent-talks-to-another) | Ask another agent headless, optionally seeded with a prior session's context |
+| [`par converse`](#converse--two-agents-multi-turn) | Put two agents in a multi-turn conversation, watching them work it out |
 | [`par mcp`](#mcp--expose-resume-and-ask-to-other-agents) | Run an MCP server so other agents can resume sessions and ask each other |
 
 ---
@@ -280,6 +281,25 @@ par ask -h g -p "..." --dry-run                              # show the routed c
 
 Notes: each call is one-shot (the target keeps no memory between asks); yolo is on by default so the headless agent can't block on a permission prompt; long transcripts are truncated to the most recent turns within the budget.
 
+## Converse — two agents, multi-turn
+
+`par converse` puts two agents in one conversation: A speaks, B replies, A replies, and so on. Each agent is stateless and headless, so `par` itself holds the running dialogue and feeds it back every turn — `par ask`'s context bridge, accumulated across the loop. Output streams turn by turn so you can watch them work.
+
+```sh
+par converse --a cl --b g -p "Design a rate limiter; A proposes, B critiques."
+par converse --a cl --b g -p "Agree on a name." --turns 8 --until AGREED
+par converse --a cl --b g -p "Continue this." --context-from co     # seed turn 1 with a codex session
+par converse --a cl --b g -p "..." --a-model <m> --b-model <m> --dry-run
+```
+
+- `--a` / `--b` — the two agents (short codes allowed). `--a-model` / `--b-model` set per-agent models.
+- `--turns N` — total turns, alternating, starting with A (default 6; capped at 50).
+- `--until <phrase>` — stop early when a reply contains the phrase (agents are told to emit it when done).
+- `--context-from harness[:session]` — seed the first turn with a prior session's transcript.
+- `--max-context`, `--cwd`, `--no-yolo`, `--dry-run` as in `par ask`. Aliases: `par debate`, `par relay`.
+
+Each turn spawns a full agent process, so cost and latency scale with `--turns`. The loop is two-party; `--until` is the way to end before the turn budget.
+
 ## MCP — expose resume and ask to other agents
 
 `par mcp` runs a small [MCP](https://modelcontextprotocol.io) server over stdio (newline-delimited JSON-RPC 2.0), so any MCP-capable agent can resume sessions in the current directory **and** ask other agents questions. This is how you say *"pick up my last conversation from Claude"* — or *"ask Gemini to review this, with my Claude context"* — from inside another agent.
@@ -394,6 +414,7 @@ src/
   process.rs           child process execution (inherit-stdio run + captured run)
   json.rs              zero-dep JSON parser/serializer (used by convert, session, ask, mcp)
   ask.rs               agent-to-agent calls (headless run + transcript context injection)
+  converse.rs          multi-turn two-agent conversation loop
   mcp.rs               stdio MCP server (resume tools + ask_agent) + `mcp connect`
   harness/             per-agent adapters (claude, codex, cursor, gemini, goose,
                        opencode, qwen, aider, amazon_q, copilot, kimi, antigravity)
@@ -443,7 +464,7 @@ impl Harness for ExampleHarness {
 
 Working infrastructure for local automation.
 
-**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run routing · cross-agent session resume · agent-to-agent calls with context bridging · stdio MCP server · validating setup script.
+**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run routing · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · stdio MCP server · validating setup script.
 
 **Not yet:** GitHub Actions release builds · Homebrew formula · end-to-end smoke tests against every vendor CLI · a stable semver contract per agent mapping.
 

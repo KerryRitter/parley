@@ -57,6 +57,25 @@ pub(crate) struct AskOptions {
     pub dry_run: bool,
 }
 
+/// Options for `par converse` — two agents take turns in one conversation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ConverseOptions {
+    pub a: Option<String>,
+    pub b: Option<String>,
+    pub a_model: Option<String>,
+    pub b_model: Option<String>,
+    pub topic: Option<String>,
+    pub turns: usize,
+    /// `harness[:session]` of a transcript to seed the first turn.
+    pub context_from: Option<String>,
+    /// Stop early when a reply contains this phrase.
+    pub until: Option<String>,
+    pub max_context_chars: Option<usize>,
+    pub cwd: Option<String>,
+    pub yolo: bool,
+    pub dry_run: bool,
+}
+
 /// Options for `par mcp`. With no subcommand it runs the stdio server;
 /// `par mcp connect -h <harness>` registers this server into a harness.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -77,6 +96,7 @@ pub(crate) enum CliAction {
     Convert(ConvertOptions),
     Resume(ResumeOptions),
     Ask(AskOptions),
+    Converse(ConverseOptions),
     Mcp(McpOptions),
     Run(Box<CliOptions>),
 }
@@ -136,6 +156,10 @@ where
         Some("ask") => {
             args.next();
             return parse_ask_args(args);
+        }
+        Some("converse" | "debate" | "relay") => {
+            args.next();
+            return parse_converse_args(args);
         }
         Some("mcp") => {
             args.next();
@@ -325,6 +349,15 @@ Ask (agent-to-agent):
   par ask -h g -p \"...\" --max-context 8000 --dry-run
                                   Cap injected context; show the command, run nothing
   Context sources: claude, codex, opencode (cursor/gemini cannot export transcripts)
+
+Converse (multi-turn, two agents):
+  par converse --a cl --b g -p \"<task>\"    Two agents take turns (default 6 turns)
+  par converse --a cl --b g -p \"...\" --turns 8 --until DONE
+                                  Run up to 8 turns, stop when a reply says DONE
+  par converse --a cl --b g -p \"...\" --context-from co
+                                  Seed turn 1 with your latest codex session here
+  --a-model / --b-model <m>       Per-agent model;  also: --max-context, --cwd, --dry-run
+  (aliases: par debate, par relay)
 
 MCP:
   par mcp                         Run the stdio MCP server (JSON-RPC over stdin/stdout)
@@ -629,6 +662,78 @@ where
         return Err("ask requires a prompt: par ask -h <agent> -p \"<prompt>\"".to_string());
     }
     Ok(CliAction::Ask(options))
+}
+
+fn parse_converse_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let mut options = ConverseOptions {
+        turns: 6,
+        yolo: true,
+        ..ConverseOptions::default()
+    };
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" => return Ok(CliAction::Help),
+            "--a" | "-a" => options.a = Some(require_value(&mut args, "--a")?),
+            "--b" | "-b" => options.b = Some(require_value(&mut args, "--b")?),
+            "--a-model" => options.a_model = Some(require_value(&mut args, "--a-model")?),
+            "--b-model" => options.b_model = Some(require_value(&mut args, "--b-model")?),
+            "-p" | "--prompt" | "--topic" => {
+                options.topic = Some(require_value(&mut args, "--prompt")?)
+            }
+            "--turns" => {
+                let raw = require_value(&mut args, "--turns")?;
+                options.turns = raw
+                    .parse()
+                    .map_err(|_| format!("--turns must be a number, got {raw}"))?;
+            }
+            "--context-from" | "--context" => {
+                options.context_from = Some(require_value(&mut args, "--context-from")?)
+            }
+            "--until" => options.until = Some(require_value(&mut args, "--until")?),
+            "--max-context" => {
+                let raw = require_value(&mut args, "--max-context")?;
+                options.max_context_chars = Some(
+                    raw.parse()
+                        .map_err(|_| format!("--max-context must be a number, got {raw}"))?,
+                );
+            }
+            "--cwd" => options.cwd = Some(require_value(&mut args, "--cwd")?),
+            "--yolo" => options.yolo = true,
+            "--no-yolo" => options.yolo = false,
+            "--dry-run" => options.dry_run = true,
+            _ if arg.starts_with("--a=") => options.a = Some(value_after_equals(&arg, "--a=")),
+            _ if arg.starts_with("--b=") => options.b = Some(value_after_equals(&arg, "--b=")),
+            _ if arg.starts_with("--context-from=") => {
+                options.context_from = Some(value_after_equals(&arg, "--context-from="))
+            }
+            _ if arg.starts_with("--cwd=") => {
+                options.cwd = Some(value_after_equals(&arg, "--cwd="))
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown converse option: {arg}")),
+            _ => {
+                options.topic = Some(match options.topic {
+                    Some(existing) => format!("{existing} {arg}"),
+                    None => arg,
+                });
+            }
+        }
+    }
+
+    if options.a.is_none() || options.b.is_none() {
+        return Err(
+            "converse requires two agents: par converse --a <agent> --b <agent> -p \"<task>\""
+                .to_string(),
+        );
+    }
+    if options.topic.is_none() {
+        return Err("converse requires a topic: -p \"<task>\"".to_string());
+    }
+    Ok(CliAction::Converse(options))
 }
 
 fn parse_mcp_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
