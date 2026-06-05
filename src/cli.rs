@@ -41,6 +41,22 @@ pub(crate) struct ResumeOptions {
     pub yolo: bool,
 }
 
+/// Options for `par ask` — run one agent headless and capture its reply,
+/// optionally seeded with another agent's session transcript.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct AskOptions {
+    pub harness: Option<String>,
+    pub prompt: Option<String>,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub cwd: Option<String>,
+    pub yolo: bool,
+    /// `harness[:session]` of a transcript to inject as context.
+    pub context_from: Option<String>,
+    pub max_context_chars: Option<usize>,
+    pub dry_run: bool,
+}
+
 /// Options for `par mcp`. With no subcommand it runs the stdio server;
 /// `par mcp connect -h <harness>` registers this server into a harness.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -60,6 +76,7 @@ pub(crate) enum CliAction {
     Update(UpdateOptions),
     Convert(ConvertOptions),
     Resume(ResumeOptions),
+    Ask(AskOptions),
     Mcp(McpOptions),
     Run(Box<CliOptions>),
 }
@@ -115,6 +132,10 @@ where
         Some("resume") => {
             args.next();
             return parse_resume_args(args);
+        }
+        Some("ask") => {
+            args.next();
+            return parse_ask_args(args);
         }
         Some("mcp") => {
             args.next();
@@ -294,6 +315,16 @@ Resume:
 
   Native listing: claude, codex, opencode. Delegate resume (best-effort listing,
   marked ~): cursor, gemini — resume runs the native CLI's own cwd-scoped resume.
+
+Ask (agent-to-agent):
+  par ask -h g -p \"...\"           Run another agent headless, print its reply
+  par ask -h g -p \"...\" --context-from cl
+                                  Seed the call with your latest claude session here
+  par ask -h cl --context-from co:<id> -p \"...\"
+                                  Use a specific source session id as context
+  par ask -h g -p \"...\" --max-context 8000 --dry-run
+                                  Cap injected context; show the command, run nothing
+  Context sources: claude, codex, opencode (cursor/gemini cannot export transcripts)
 
 MCP:
   par mcp                         Run the stdio MCP server (JSON-RPC over stdin/stdout)
@@ -533,6 +564,71 @@ where
     }
 
     Ok(CliAction::Resume(options))
+}
+
+fn parse_ask_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    // Yolo defaults on: a captured headless call must not block on a prompt.
+    let mut options = AskOptions {
+        yolo: true,
+        ..AskOptions::default()
+    };
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" => return Ok(CliAction::Help),
+            "-h" => match args.peek() {
+                Some(next) if !next.starts_with('-') => options.harness = args.next(),
+                _ => return Ok(CliAction::Help),
+            },
+            "--harness" => options.harness = Some(require_value(&mut args, "--harness")?),
+            "-p" | "--prompt" => options.prompt = Some(require_value(&mut args, "--prompt")?),
+            "-m" | "--model" => options.model = Some(require_value(&mut args, "--model")?),
+            "--provider" => options.provider = Some(require_value(&mut args, "--provider")?),
+            "--cwd" => options.cwd = Some(require_value(&mut args, "--cwd")?),
+            "--context-from" | "--context" => {
+                options.context_from = Some(require_value(&mut args, "--context-from")?)
+            }
+            "--max-context" => {
+                let raw = require_value(&mut args, "--max-context")?;
+                options.max_context_chars = Some(
+                    raw.parse()
+                        .map_err(|_| format!("--max-context must be a number, got {raw}"))?,
+                );
+            }
+            "--yolo" => options.yolo = true,
+            "--no-yolo" => options.yolo = false,
+            "--dry-run" => options.dry_run = true,
+            _ if arg.starts_with("--harness=") => {
+                options.harness = Some(value_after_equals(&arg, "--harness="))
+            }
+            _ if arg.starts_with("--context-from=") => {
+                options.context_from = Some(value_after_equals(&arg, "--context-from="))
+            }
+            _ if arg.starts_with("--cwd=") => {
+                options.cwd = Some(value_after_equals(&arg, "--cwd="))
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown ask option: {arg}")),
+            // Bare text accumulates into the prompt.
+            _ => {
+                options.prompt = Some(match options.prompt {
+                    Some(existing) => format!("{existing} {arg}"),
+                    None => arg,
+                });
+            }
+        }
+    }
+
+    if options.harness.is_none() {
+        return Err("ask requires a target agent: par ask -h <agent> -p \"<prompt>\"".to_string());
+    }
+    if options.prompt.is_none() {
+        return Err("ask requires a prompt: par ask -h <agent> -p \"<prompt>\"".to_string());
+    }
+    Ok(CliAction::Ask(options))
 }
 
 fn parse_mcp_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>

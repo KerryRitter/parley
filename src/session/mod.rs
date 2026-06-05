@@ -48,6 +48,13 @@ pub(crate) struct SessionRef {
     pub delegated: bool,
 }
 
+/// One message in a session transcript, normalized across agents.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Turn {
+    pub role: String,
+    pub text: String,
+}
+
 pub(crate) trait SessionStore {
     fn harness(&self) -> &'static str;
     /// Sessions scoped to `cwd`, newest first. Returns an empty vec (not an
@@ -56,6 +63,14 @@ pub(crate) trait SessionStore {
     /// Build the native resume command for `id` in `cwd`. `id` may be an
     /// empty string for delegate stores that only resume the latest session.
     fn resume_invocation(&self, id: &str, cwd: &Path, yolo: bool) -> Result<Invocation, String>;
+    /// Extract the conversation transcript (user/assistant turns) for a
+    /// session, oldest first. Default: unsupported (delegate/hash-scoped stores).
+    fn transcript(&self, _id: &str, _cwd: &Path) -> Result<Vec<Turn>, String> {
+        Err(format!(
+            "transcript export is not supported for {} sessions",
+            self.harness()
+        ))
+    }
 }
 
 fn registry() -> Vec<Box<dyn SessionStore>> {
@@ -321,6 +336,64 @@ pub(crate) fn resume_command_string(
         store_for(harness).ok_or_else(|| format!("no session store for harness \"{harness}\""))?;
     let inv = store.resume_invocation(id, cwd, yolo)?;
     Ok(render_command(&inv))
+}
+
+/// Default ceiling on how much transcript text to inject as context.
+pub(crate) const DEFAULT_CONTEXT_CHARS: usize = 12_000;
+
+/// Build a context preamble from a prior session's transcript, for handing one
+/// agent's conversation to another. `selector` is a session id, or empty /
+/// "latest" for the newest session in `cwd`. Keeps the most recent turns within
+/// `max_chars`.
+pub(crate) fn transcript_context(
+    harness: &str,
+    selector: &str,
+    cwd: &Path,
+    max_chars: usize,
+) -> Result<String, String> {
+    let store =
+        store_for(harness).ok_or_else(|| format!("no session store for harness \"{harness}\""))?;
+
+    let id = if selector.is_empty() || selector.eq_ignore_ascii_case("latest") {
+        store
+            .list(cwd)?
+            .into_iter()
+            .next()
+            .map(|s| s.id)
+            .ok_or_else(|| format!("no {harness} sessions found for {}", cwd.display()))?
+    } else {
+        selector.to_string()
+    };
+
+    let turns = store.transcript(&id, cwd)?;
+    Ok(format_context(harness, &id, &turns, max_chars))
+}
+
+fn format_context(harness: &str, id: &str, turns: &[Turn], max_chars: usize) -> String {
+    let mut body = String::new();
+    for turn in turns {
+        let text = turn.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        body.push_str(&format!("[{}]\n{}\n\n", turn.role, text));
+    }
+
+    // Keep the tail (most recent turns) when over budget.
+    let mut truncated = false;
+    if body.chars().count() > max_chars {
+        let start = body.chars().count() - max_chars;
+        body = body.chars().skip(start).collect();
+        truncated = true;
+    }
+
+    let header = format!("=== Context from {harness} session {id} ===");
+    let note = if truncated {
+        "\n[...earlier turns omitted to fit the context budget...]\n\n"
+    } else {
+        "\n"
+    };
+    format!("{header}{note}{}", body.trim_end())
 }
 
 // ---- Shared filesystem helpers (used by adapter submodules) ----------------

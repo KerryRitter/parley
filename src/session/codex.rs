@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use super::{canonical, file_mtime_ms, home_dir, SessionRef, SessionStore};
+use super::{canonical, file_mtime_ms, home_dir, SessionRef, SessionStore, Turn};
 use crate::harness::Invocation;
 use crate::json::Json;
 
@@ -55,6 +55,83 @@ impl SessionStore for CodexSessions {
             "codex",
             vec!["resume".to_string(), id.to_string()],
         ))
+    }
+
+    fn transcript(&self, id: &str, _cwd: &Path) -> Result<Vec<Turn>, String> {
+        let home = home_dir().ok_or("cannot resolve HOME")?;
+        let root = home.join(".codex").join("sessions");
+        let mut rollouts = Vec::new();
+        collect_jsonl(&root, &mut rollouts);
+
+        let path = rollouts
+            .into_iter()
+            .find(|p| file_session_id(p).as_deref() == Some(id))
+            .ok_or_else(|| format!("codex session {id} not found"))?;
+
+        let file = File::open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
+        let mut turns = Vec::new();
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let json = match Json::parse(line) {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
+            let payload = match json.get("payload") {
+                Some(p) => p,
+                None => continue,
+            };
+            if payload.get("type").and_then(Json::as_str) != Some("message") {
+                continue;
+            }
+            let role = match payload.get("role").and_then(Json::as_str) {
+                Some(r @ ("user" | "assistant")) => r,
+                _ => continue,
+            };
+            if let Some(text) = content_text(payload) {
+                let text = text.trim();
+                if !text.is_empty() && !text.starts_with('<') {
+                    turns.push(Turn {
+                        role: role.to_string(),
+                        text: text.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(turns)
+    }
+}
+
+/// Read the session id from a rollout file's leading `session_meta` line.
+fn file_session_id(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let mut first = String::new();
+    BufReader::new(file).read_line(&mut first).ok()?;
+    let meta = Json::parse(first.trim()).ok()?;
+    meta.get("payload")?
+        .get("id")
+        .and_then(Json::as_str)
+        .map(str::to_string)
+}
+
+/// Concatenate `input_text` / `output_text` blocks of a codex message payload.
+fn content_text(payload: &Json) -> Option<String> {
+    let arr = payload.get("content")?.as_array()?;
+    let mut parts = Vec::new();
+    for block in arr {
+        let kind = block.get("type").and_then(Json::as_str).unwrap_or("");
+        if kind == "input_text" || kind == "output_text" {
+            if let Some(text) = block.get("text").and_then(Json::as_str) {
+                parts.push(text.to_string());
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
     }
 }
 

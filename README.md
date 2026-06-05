@@ -76,7 +76,8 @@ The script installs a prebuilt release binary for your platform when available, 
 | [`par shims install`](#shims) | Create `claudey` / `codexy` one-shot shortcuts |
 | [`par convert`](#convert--share-one-config-across-agents) | Port your `.claude/` config to every other agent |
 | [`par resume`](#resume--continue-a-past-session-from-any-agent) | Browse & resume past sessions across all agents, scoped to the folder |
-| [`par mcp`](#mcp--expose-resume-to-other-agents) | Run an MCP server so other agents can pick up your last conversation |
+| [`par ask`](#ask--one-agent-talks-to-another) | Ask another agent headless, optionally seeded with a prior session's context |
+| [`par mcp`](#mcp--expose-resume-and-ask-to-other-agents) | Run an MCP server so other agents can resume sessions and ask each other |
 
 ---
 
@@ -263,15 +264,32 @@ A selector is either a list index (`par resume 2`) or a raw session id (`par res
 
 ---
 
-## MCP — expose resume to other agents
+## Ask — one agent talks to another
 
-`par mcp` runs a small [MCP](https://modelcontextprotocol.io) server over stdio (newline-delimited JSON-RPC 2.0), so any MCP-capable agent can ask about — and resume — sessions in the current directory. This is how you say *"pick up my last conversation from Claude"* while sitting in Codex.
+`par ask` runs another agent **headless** and returns its reply as text. Because `par` already routes a prompt to any agent, "Claude asks Gemini" is just routing the prompt to Gemini and capturing its output. With `--context-from`, `par` first reads a prior session's transcript and prepends it — so the answer is informed by that history. This is the cross-agent **context bridge**.
+
+```sh
+par ask -h g -p "critique this approach in 3 bullets"        # ask gemini, print its reply
+par ask -h g -p "what did we decide?" --context-from cl      # seed with your latest claude session here
+par ask -h cl -p "continue this" --context-from co:<id>      # use a specific source session id
+par ask -h g -p "..." --max-context 8000                     # cap injected context (default 12000 chars)
+par ask -h g -p "..." --dry-run                              # show the routed command + final prompt, run nothing
+```
+
+`--context-from` takes `harness[:session]`; omit the session (or use `latest`) for the newest in the directory. **Context sources:** `claude`, `codex`, `opencode` (full transcripts). `cursor` / `gemini` can't export transcripts, so they can't be context *sources* — they can still be asked.
+
+Notes: each call is one-shot (the target keeps no memory between asks); yolo is on by default so the headless agent can't block on a permission prompt; long transcripts are truncated to the most recent turns within the budget.
+
+## MCP — expose resume and ask to other agents
+
+`par mcp` runs a small [MCP](https://modelcontextprotocol.io) server over stdio (newline-delimited JSON-RPC 2.0), so any MCP-capable agent can resume sessions in the current directory **and** ask other agents questions. This is how you say *"pick up my last conversation from Claude"* — or *"ask Gemini to review this, with my Claude context"* — from inside another agent.
 
 **Tools:**
 
 - `list_sessions {cwd?, harness?}` — resumable sessions for a directory, newest first.
 - `get_last_session {cwd?, harness?}` — the most recent session plus a ready-to-run resume command.
-- `resume_command {harness, id, cwd?, yolo?}` — build the native resume command for a session id (returned as text; the server never spawns an interactive agent inside the caller).
+- `resume_command {harness, id, cwd?, yolo?}` — build the native resume command for a session id (text; never spawns an interactive agent).
+- `ask_agent {harness, prompt, model?, provider?, cwd?, context_from?: {harness, session?}}` — run another agent headless and return its reply, optionally seeded with a session transcript. The agent-to-agent / context-bridge primitive.
 
 **Register it into an agent** — `par mcp connect` runs whatever that agent needs:
 
@@ -373,17 +391,18 @@ src/
   main.rs              entrypoint, stdin handling, dry-run, dispatch
   cli.rs               command-line parser
   model.rs             provider/model resolution
-  process.rs           child process execution
-  json.rs              zero-dep JSON parser/serializer (used by convert, session, mcp)
-  mcp.rs               stdio MCP server + `mcp connect` registration
+  process.rs           child process execution (inherit-stdio run + captured run)
+  json.rs              zero-dep JSON parser/serializer (used by convert, session, ask, mcp)
+  ask.rs               agent-to-agent calls (headless run + transcript context injection)
+  mcp.rs               stdio MCP server (resume tools + ask_agent) + `mcp connect`
   harness/             per-agent adapters (claude, codex, cursor, gemini, goose,
                        opencode, qwen, aider, amazon_q, copilot, kimi, antigravity)
     mod.rs             Harness trait, Request, HarnessFactory, normalize_harness
     invocation.rs      command/args/env representation
   convert/             .claude/ reader + per-target writers + cross-reference resolver
-  session/             cross-agent session discovery + resume
-    mod.rs             SessionStore trait, SessionRef, listing + resume
-    claude.rs codex.rs opencode.rs   native transcript parsers (cwd-scoped)
+  session/             cross-agent session discovery, resume, and transcript export
+    mod.rs             SessionStore trait, SessionRef, Turn, listing + resume + context
+    claude.rs codex.rs opencode.rs   native parsers (cwd-scoped listing + transcripts)
     cursor.rs gemini.rs              delegate adapters (resume via native CLI)
   installer.rs         agent installer registry
 ```
@@ -424,7 +443,7 @@ impl Harness for ExampleHarness {
 
 Working infrastructure for local automation.
 
-**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run routing · cross-agent session resume + stdio MCP server · validating setup script.
+**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run routing · cross-agent session resume · agent-to-agent calls with context bridging · stdio MCP server · validating setup script.
 
 **Not yet:** GitHub Actions release builds · Homebrew formula · end-to-end smoke tests against every vendor CLI · a stable semver contract per agent mapping.
 

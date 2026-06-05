@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use super::{canonical, file_mtime_ms, home_dir, SessionRef, SessionStore};
+use super::{canonical, file_mtime_ms, home_dir, SessionRef, SessionStore, Turn};
 use crate::harness::Invocation;
 use crate::json::Json;
 
@@ -65,6 +65,43 @@ impl SessionStore for ClaudeSessions {
         }
         Ok(Invocation::new("claude", args))
     }
+
+    fn transcript(&self, id: &str, cwd: &Path) -> Result<Vec<Turn>, String> {
+        let home = home_dir().ok_or("cannot resolve HOME")?;
+        let path = home
+            .join(".claude")
+            .join("projects")
+            .join(slug_for_cwd(cwd))
+            .join(format!("{id}.jsonl"));
+        let file = File::open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
+
+        let mut turns = Vec::new();
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let json = match Json::parse(line) {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
+            let role = match json.get("type").and_then(Json::as_str) {
+                Some(r @ ("user" | "assistant")) => r,
+                _ => continue,
+            };
+            if let Some(text) = message_text(&json) {
+                let text = text.trim();
+                // Skip injected system reminders and empty/tool-only turns.
+                if !text.is_empty() && !text.starts_with('<') {
+                    turns.push(Turn {
+                        role: role.to_string(),
+                        text: text.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(turns)
+    }
 }
 
 /// Map a cwd to Claude's project directory name: every char outside
@@ -110,7 +147,7 @@ fn summarize(path: &Path) -> (String, Option<usize>) {
             "user" => {
                 messages += 1;
                 if first_user.is_none() {
-                    if let Some(text) = user_text(&json) {
+                    if let Some(text) = message_text(&json) {
                         if !text.trim().is_empty() && !text.trim_start().starts_with('<') {
                             first_user = Some(text);
                         }
@@ -129,22 +166,28 @@ fn summarize(path: &Path) -> (String, Option<usize>) {
     (title, count)
 }
 
-/// Extract the text of a Claude `user` line. `content` is either a string or an
-/// array of `{type:"text", text:"..."}` blocks.
-fn user_text(json: &Json) -> Option<String> {
+/// Extract the text of a Claude `user`/`assistant` line. `content` is either a
+/// string or an array of blocks; we concatenate the `text` blocks and ignore
+/// tool_use / tool_result / thinking blocks.
+fn message_text(json: &Json) -> Option<String> {
     let content = json.get("message")?.get("content")?;
     if let Some(s) = content.as_str() {
         return Some(s.to_string());
     }
     let arr = content.as_array()?;
+    let mut parts = Vec::new();
     for block in arr {
         if block.get("type").and_then(Json::as_str) == Some("text") {
             if let Some(text) = block.get("text").and_then(Json::as_str) {
-                return Some(text.to_string());
+                parts.push(text.to_string());
             }
         }
     }
-    None
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
 }
 
 #[cfg(test)]

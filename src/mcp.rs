@@ -5,9 +5,10 @@
 //! scoped, like every harness's own `--resume`, to a working directory.
 //!
 //! Built on the crate's zero-dependency `Json` type. The protocol surface is
-//! intentionally small: `initialize`, `tools/list`, and `tools/call` with three
-//! tools. The server returns resume *commands* as text; it never spawns an
-//! interactive harness inside the calling agent.
+//! intentionally small: `initialize`, `tools/list`, and `tools/call` with four
+//! tools — three for session discovery/resume, plus `ask_agent` for one-shot
+//! agent-to-agent calls. Resume tools return *commands* as text and never spawn
+//! an interactive harness; `ask_agent` runs the target agent headless.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -15,6 +16,7 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+use crate::ask::{self, AskRequest, ContextRef};
 use crate::cli::McpOptions;
 use crate::harness::{normalize_harness, Invocation};
 use crate::json::Json;
@@ -252,9 +254,46 @@ fn tools_list_result() -> Json {
         vec!["harness", "id"],
     );
 
+    let str_prop = |desc: &str| {
+        obj(vec![
+            ("type", Json::Str("string".to_string())),
+            ("description", Json::Str(desc.to_string())),
+        ])
+    };
+    let ask_tool = tool(
+        "ask_agent",
+        "Ask another agent (claude, codex, gemini, opencode, cursor, ...) a one-shot question headless and return its reply. Optionally seed it with a prior session's transcript via `context_from` — this is how one agent hands its conversation to another.",
+        obj(vec![
+            ("harness", str_prop("Target agent to ask (shorthands allowed).")),
+            ("prompt", str_prop("The question or task for the target agent.")),
+            ("model", str_prop("Optional model override.")),
+            ("provider", str_prop("Optional provider override.")),
+            ("cwd", str_prop("Working directory (defaults to the server's cwd).")),
+            (
+                "context_from",
+                obj(vec![
+                    ("type", Json::Str("object".to_string())),
+                    (
+                        "description",
+                        Json::Str("Seed the call with another agent's session transcript.".to_string()),
+                    ),
+                    (
+                        "properties",
+                        obj(vec![
+                            ("harness", str_prop("Source agent (claude, codex, opencode).")),
+                            ("session", str_prop("Session id, or 'latest' / omitted for the newest in cwd.")),
+                        ]),
+                    ),
+                    ("required", Json::Array(vec![Json::Str("harness".to_string())])),
+                ]),
+            ),
+        ]),
+        vec!["harness", "prompt"],
+    );
+
     obj(vec![(
         "tools",
-        Json::Array(vec![list_tool, last_tool, resume_tool]),
+        Json::Array(vec![list_tool, last_tool, resume_tool, ask_tool]),
     )])
 }
 
@@ -290,6 +329,53 @@ fn call_tool(request: &Json, default_cwd: &Path) -> Result<Json, (i64, String)> 
             let yolo = args.get("yolo").and_then(Json::as_bool).unwrap_or(false);
             match session::resume_command_string(harness, id, &cwd, yolo) {
                 Ok(cmd) => Ok(text_content(&cmd, false)),
+                Err(e) => Ok(text_content(&e, true)),
+            }
+        }
+        "ask_agent" => {
+            let harness = harness.ok_or((-32602, "missing harness".to_string()))?;
+            let prompt = args
+                .get("prompt")
+                .and_then(Json::as_str)
+                .ok_or((-32602, "missing prompt".to_string()))?;
+            let context = args.get("context_from").and_then(|c| {
+                c.get("harness").and_then(Json::as_str).map(|h| ContextRef {
+                    harness: h.to_string(),
+                    session: c
+                        .get("session")
+                        .and_then(Json::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                })
+            });
+            let request = AskRequest {
+                harness: harness.to_string(),
+                prompt: prompt.to_string(),
+                model: args.get("model").and_then(Json::as_str).map(str::to_string),
+                provider: args
+                    .get("provider")
+                    .and_then(Json::as_str)
+                    .map(str::to_string),
+                cwd: cwd.clone(),
+                // Headless capture: yolo on so the agent can't block on a prompt.
+                yolo: args.get("yolo").and_then(Json::as_bool).unwrap_or(true),
+                context,
+                max_context_chars: args
+                    .get("max_context_chars")
+                    .and_then(Json::as_number)
+                    .map(|n| n as usize)
+                    .unwrap_or(session::DEFAULT_CONTEXT_CHARS),
+            };
+            match ask::run(&request) {
+                Ok(out) if out.success => Ok(text_content(out.stdout.trim(), false)),
+                Ok(out) => {
+                    let msg = if out.stderr.trim().is_empty() {
+                        out.stdout.trim().to_string()
+                    } else {
+                        out.stderr.trim().to_string()
+                    };
+                    Ok(text_content(&format!("{harness} failed: {msg}"), true))
+                }
                 Err(e) => Ok(text_content(&e, true)),
             }
         }
@@ -410,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_exposes_three_tools() {
+    fn tools_list_exposes_all_tools() {
         let req =
             Json::parse(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#).unwrap();
         let resp = handle_request(&req, &cwd()).unwrap();
@@ -419,7 +505,7 @@ mod tests {
             .and_then(|r| r.get("tools"))
             .and_then(Json::as_array)
             .unwrap();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
         let names: Vec<_> = tools
             .iter()
             .filter_map(|t| t.get("name").and_then(Json::as_str))
@@ -427,6 +513,7 @@ mod tests {
         assert!(names.contains(&"list_sessions"));
         assert!(names.contains(&"get_last_session"));
         assert!(names.contains(&"resume_command"));
+        assert!(names.contains(&"ask_agent"));
     }
 
     #[test]

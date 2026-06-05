@@ -29,3 +29,40 @@ pub(crate) fn run_invocation(
 
     std::process::exit(status.code().unwrap_or(1));
 }
+
+/// Output captured from a child process (used by `par ask` / the MCP
+/// `ask_agent` tool, where one agent's reply is the value, not a stream).
+pub(crate) struct Captured {
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
+}
+
+/// Run an invocation to completion, capturing stdout/stderr instead of
+/// inheriting them. stdin is closed so the child cannot block on a prompt.
+pub(crate) fn capture_invocation(
+    invocation: Invocation,
+    cwd: Option<&str>,
+) -> Result<Captured, String> {
+    let mut command = Command::new(&invocation.command);
+    command
+        .args(&invocation.args)
+        .envs(&invocation.env)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to start {}: {error}", invocation.command))?;
+
+    Ok(Captured {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        success: output.status.success(),
+    })
+}
