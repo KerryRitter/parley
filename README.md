@@ -10,11 +10,25 @@ par -h co -m gpt-5.4 -p "fix the failing tests"             # codex
 git diff | par -h oc --provider anthropic -p "review this"  # opencode, with piped context
 ```
 
-It never calls a model API itself. It starts an already-installed agent CLI, translates shared flags into that agent's command surface, streams its output, and exits with its status.
+Parley never calls a model API itself. It drives the agent CLIs you already have — translating one shared flag set into each agent's command surface, streaming its output, exiting with its status. Your auth, models, and permissions stay with the agents; Parley is the layer that makes them work together.
 
 ### Why
 
-Every agent CLI has a different headless interface — `claude -p`, `codex exec`, `gemini --prompt`, `goose run -t`, `opencode run`, `aider --message`. Switching agents means rewriting commands, model flags, provider syntax, and env vars. `par` keeps your scripts focused on intent and lets the adapter own the translation. Switch agents by changing one flag.
+**Agent CLIs are silos.** Each has its own headless interface (`claude -p`, `codex exec`, `gemini --prompt`, `goose run -t`, `opencode run`, `aider --message`), its own config format, and its own on-disk session store — and none of them can see each other. So:
+
+- **Scripts are brittle.** Switching agents means rewriting commands, model flags, provider syntax, and env vars.
+- **Config is duplicated.** The same project instructions, commands, and MCP servers get hand-maintained once per agent.
+- **Work gets stranded.** A conversation lives inside whichever agent you happened to start in; you can't pick it up elsewhere.
+- **Agents can't combine.** Two models with different strengths have no way to review each other's work or collaborate.
+
+**Parley is the interoperability layer over all of them.** It does four things, each removing one of those walls:
+
+- **One interface** — route any prompt to any agent by changing a single flag (`par -p`, `-h <agent>`). The adapter owns the translation.
+- **One config** — author your `.claude/` pack once, `par convert` generates each agent's native config from it.
+- **Portable sessions** — `par resume` lists and resumes any agent's past sessions for this folder, regardless of which agent created them.
+- **Agents that collaborate** — `par ask` lets one agent query another (seeded with a shared session's context), and `par converse` puts two agents in a multi-turn conversation. Expose it over MCP with `par mcp` so an agent can do this itself — *"ask Gemini to review this, with my Claude context."*
+
+The result: your automation describes *intent*, not which agent is wired up today — and your agents stop being islands.
 
 ---
 
