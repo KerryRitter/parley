@@ -186,7 +186,7 @@ pub(crate) fn run_update(options: UpdateOptions) -> Result<(), String> {
 }
 
 fn update_self(dry_run: bool) -> Result<(), String> {
-    let command = "cargo install --git https://github.com/KerryRitter/programmatic-agent-router.git --branch main";
+    let command = "cargo install --git https://github.com/KerryRitter/parley.git --branch main";
     println!("updating par...");
     if dry_run {
         println!("dry-run: sh -c '{command}'");

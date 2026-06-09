@@ -1,5 +1,7 @@
 # Parley
 
+<p align="center"><img src="assets/logo.png" alt="Parley logo" width="180"></p>
+
 **One prompt interface for every AI coding agent — route, resume, bridge, and converse across them.**
 
 Parley is a small, dependency-free Rust CLI (the binary is `par`). You write `par -p "do the thing"`, and it routes the call to whichever local agent CLI you choose — Claude, Codex, Cursor, Gemini, Goose, OpenCode, Qwen, Aider, Amazon Q, Copilot, Kimi, or Antigravity — then lets those agents resume each other's sessions and even talk to one another.
@@ -37,7 +39,7 @@ The result: your automation describes *intent*, not which agent is wired up toda
 One command:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/programmatic-agent-router/main/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/parley/main/install.sh | sh
 ```
 
 This installs `par` into `~/.local/bin` (plus an `agent-router` alias). Make sure that directory is on your `PATH`:
@@ -54,8 +56,8 @@ par --version          # verify
 **From source** (needs [Rust](https://sh.rustup.rs)):
 
 ```sh
-git clone https://github.com/KerryRitter/programmatic-agent-router.git
-cd programmatic-agent-router
+git clone https://github.com/KerryRitter/parley.git
+cd parley
 scripts/setup.sh --install        # validates, then `cargo install --path . --force`
 ```
 
@@ -64,7 +66,7 @@ This creates `~/.local/bin/par` and `~/.local/bin/agent-router -> par`. Ensure b
 **Direct from GitHub:**
 
 ```sh
-cargo install --git https://github.com/KerryRitter/programmatic-agent-router.git --branch main --force
+cargo install --git https://github.com/KerryRitter/parley.git --branch main --force
 ```
 
 **Install-script options** (append after `sh -s --`):

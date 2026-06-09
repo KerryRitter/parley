@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO="${PAR_REPO:-KerryRitter/programmatic-agent-router}"
+REPO="${PAR_REPO:-KerryRitter/parley}"
 REF="${PAR_REF:-main}"
 INSTALL_DIR="${PAR_INSTALL_DIR:-$HOME/.local/bin}"
 GIT_PROTOCOL="${PAR_GIT_PROTOCOL:-https}"
@@ -17,7 +17,7 @@ Installs par from GitHub.
 
 Options:
   --install-dir <dir>  Install directory (default: ~/.local/bin)
-  --repo <owner/repo>  GitHub repository (default: KerryRitter/programmatic-agent-router)
+  --repo <owner/repo>  GitHub repository (default: KerryRitter/parley)
   --ref <ref>          Git ref for cargo source fallback (default: main)
   --git-protocol <p>   Git protocol for source fallback: https or ssh (default: https)
   --from-source        Skip release binaries and install with cargo from GitHub
