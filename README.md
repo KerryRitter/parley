@@ -1,36 +1,74 @@
+<div align="center">
+
+<img src="assets/logo.png" alt="Parley" width="150">
+
 # Parley
 
-<p align="center"><img src="assets/logo.png" alt="Parley logo" width="180"></p>
+**Your coding agents are smarter together.**
 
-**One prompt interface for every AI coding agent — route, resume, bridge, and converse across them.**
+A **CLI** *and* an **MCP server** that convene a panel of the agents you already run — Claude, Codex, Gemini, and more — and fuse their answers into one.
 
-Parley is a small, dependency-free Rust CLI (the binary is `par`). You write `par -p "do the thing"`, and it routes the call to whichever local agent CLI you choose — Claude, Codex, Cursor, Gemini, Goose, OpenCode, Qwen, Aider, Amazon Q, Copilot, Kimi, or Antigravity — then lets those agents resume each other's sessions and even talk to one another.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+&nbsp;![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)
+&nbsp;![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)
+&nbsp;![Platforms](https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-555)
+
+[**Install**](#install) · [**Fuse**](#fuse--a-panel-of-agents-one-answer) · [**CLI ↔ MCP**](#two-surfaces-one-tool) · [**Playbook**](docs/fusion-playbook.md) · [**Why**](#why)
+
+</div>
+
+---
+
+A single agent is a single model's judgment — one set of blind spots. Parley sends the same problem to a **panel** of agent CLIs, then fuses their replies: where they agree you get high-confidence consensus, where they disagree you get a flag worth your attention, and what none caught the panel surfaces. This is the multi-model deliberation behind **[Sakana's AB-MCTS](https://sakana.ai/ab-mcts/)** and **[OpenRouter's Fusion](https://openrouter.ai/blog/announcements/fusion-beats-frontier/)** — both report combined models beating any single one — but running over the CLIs already on your machine, with *their* auth and *your* context. **No API keys. No new vendor. Your code never leaves.**
+
+## Two surfaces, one tool
+
+Parley is **first-class both ways** — a CLI you drive, and an MCP server your agent drives. Same engine, same capabilities, whichever side you call it from:
+
+| Capability | **CLI** — *you* run it | **MCP** — *your agent* calls it |
+| --- | --- | --- |
+| **Fuse** a panel into one answer | `par fuse "design a rate limiter"` | `fuse` tool |
+| **Ask** another agent, with context | `par ask -h g -p "…" --context-from cl` | `ask_agent` tool |
+| **Resume** any agent's session here | `par resume` | `list_sessions` · `get_last_session` · `resume_command` |
+| **Converse** — two agents, multi-turn | `par converse --a cl --b g -p "…"` | *(compose via `ask_agent`)* |
+| **Route** a prompt to any agent | `par -p "…" -h <agent>` | — |
+| **Convert** one config to every agent | `par convert` | — |
 
 ```sh
-par -p "review this repository"                              # uses your default agent (claude)
-par -h co -m gpt-5.4 -p "fix the failing tests"             # codex
-git diff | par -h oc --provider anthropic -p "review this"  # opencode, with piped context
+# Drive it yourself…
+par fuse "design a rate limiter for this service"    # panel + judge → one fused answer
+
+# …or wire it into your agent once, and let Claude convene the panel mid-task:
+par mcp connect -h cl                                # registers the MCP server into Claude
+#   then just say: "fuse this across codex and gemini"  → Claude calls the `fuse` tool itself
 ```
 
-Parley never calls a model API itself. It drives the agent CLIs you already have — translating one shared flag set into each agent's command surface, streaming its output, exiting with its status. Your auth, models, and permissions stay with the agents; Parley is the layer that makes them work together.
+Parley is a small, dependency-free Rust CLI (binary: `par`). It never calls a model API itself — it drives the agent CLIs you already have, so your auth, models, and permissions stay with them. The MCP server exposes the very same operations as tools, so nothing is locked to one surface.
 
-### Why
+## Why
 
-**Agent CLIs are silos.** Each has its own headless interface (`claude -p`, `codex exec`, `gemini --prompt`, `goose run -t`, `opencode run`, `aider --message`), its own config format, and its own on-disk session store — and none of them can see each other. So:
+**A single agent is a single point of view.** Every coding agent ships one model's training, one model's failure modes, one model's blind spots. On the calls that matter — an architecture decision, a security review, a tricky migration — there's no second opinion, no disagreement to flag risk, no way to combine the model that reasons best with the model that writes the best code.
 
+Research labs already proved the fix. Sakana's AB-MCTS lets frontier models cooperate at inference time and reports problems *no single model could solve* becoming solvable. OpenRouter's Fusion runs a panel plus a judge and reports a fused pair beating every individual model. The catch with both: API-side, single-vendor, and your code leaves your machine.
+
+**Parley does it locally — and fixes the other half of the problem, that the agents are silos.** Each CLI has its own headless interface (`claude -p`, `codex exec`, `gemini --prompt`, `goose run -t`, `opencode run`, `aider --message`), its own config format, and its own on-disk session store — none can see each other. So:
+
+- **Agents can't combine.** Two models with different strengths have no way to review each other's work, debate, or vote on an answer.
 - **Scripts are brittle.** Switching agents means rewriting commands, model flags, provider syntax, and env vars.
-- **Config is duplicated.** The same project instructions, commands, and MCP servers get hand-maintained once per agent.
-- **Work gets stranded.** A conversation lives inside whichever agent you happened to start in; you can't pick it up elsewhere.
-- **Agents can't combine.** Two models with different strengths have no way to review each other's work or collaborate.
+- **Config is duplicated.** The same instructions, commands, and MCP servers get hand-maintained once per agent.
+- **Work gets stranded.** A conversation lives inside whichever agent you started in; you can't pick it up elsewhere.
 
-**Parley is the interoperability layer over all of them.** It does four things, each removing one of those walls:
+**Parley is the interoperability layer that removes all four — and turns it into collective intelligence:**
 
+- **Fuse** — `par fuse "..."` sends your prompt to a panel of agents in parallel, then a judge (Claude by default) synthesizes one answer from their consensus, contradictions, and blind spots. Same thing is an **MCP tool**, so an agent can convene its own panel mid-task — escalation when a question is worth more than one model.
 - **One interface** — route any prompt to any agent by changing a single flag (`par -p`, `-h <agent>`). The adapter owns the translation.
 - **One config** — author your `.claude/` pack once, `par convert` generates each agent's native config from it.
 - **Portable sessions** — `par resume` lists and resumes any agent's past sessions for this folder, regardless of which agent created them.
 - **Agents that collaborate** — `par ask` lets one agent query another (seeded with a shared session's context), and `par converse` puts two agents in a multi-turn conversation. Expose it over MCP with `par mcp` so an agent can do this itself — *"ask Gemini to review this, with my Claude context."*
 
-The result: your automation describes *intent*, not which agent is wired up today — and your agents stop being islands.
+The result: your automation describes *intent*, not which agent is wired up today — and your agents stop being islands and start being a team.
+
+> **New to fusion?** The [Fusion Playbook](docs/fusion-playbook.md) is the how-to for ~10× better results: when to fuse, how to pick a diverse panel, and the debate / wider-deeper / second-opinion patterns.
 
 ---
 
@@ -87,6 +125,7 @@ The script installs a prebuilt release binary for your platform when available, 
 | Command | Capability |
 | --- | --- |
 | [`par -p "..."`](#run-a-prompt) | Route a prompt to any agent, with one shared flag set |
+| [`par fuse "..."`](#fuse--a-panel-of-agents-one-answer) | Run a panel of agents in parallel; a judge fuses one answer (also an MCP tool) |
 | [`par default <agent>`](#set-a-default-agent) | Pick the default agent (and options) for this machine |
 | [`par install <agent>`](#install-agent-clis) | Install a downstream agent CLI |
 | [`par shims install`](#shims) | Create `claudey` / `codexy` one-shot shortcuts |
@@ -94,7 +133,7 @@ The script installs a prebuilt release binary for your platform when available, 
 | [`par resume`](#resume--continue-a-past-session-from-any-agent) | Browse & resume past sessions across all agents, scoped to the folder |
 | [`par ask`](#ask--one-agent-talks-to-another) | Ask another agent headless, optionally seeded with a prior session's context |
 | [`par converse`](#converse--two-agents-multi-turn) | Put two agents in a multi-turn conversation, watching them work it out |
-| [`par mcp`](#mcp--expose-resume-and-ask-to-other-agents) | Run an MCP server so other agents can resume sessions and ask each other |
+| [`par mcp`](#mcp--fuse-ask-and-resume-from-inside-your-agent) | Run an MCP server: agents can **fuse** a panel, ask each other, and resume sessions |
 
 ---
 
@@ -199,6 +238,32 @@ codexy "work in this sandbox"
 ```
 
 Override the location with `par shims install --dir <dir>` or `PAR_SHIM_DIR`. `par shims list` prints the generated names and commands.
+
+---
+
+## Fuse — a panel of agents, one answer
+
+`par fuse` is the collective-intelligence command. It sends your prompt to a **panel** of agents *in parallel*, then hands every reply to a **judge** agent — Claude by default — that synthesizes a single answer: where the panel agreed (high-confidence), where it disagreed and who's right, and what it missed. Same idea as OpenRouter's Fusion and Sakana's AB-MCTS, over the CLIs you already run. It's available both as this command **and** as an [MCP tool](#mcp--fuse-ask-and-resume-from-inside-your-agent) so an agent can convene its own panel mid-task.
+
+```sh
+par fuse -p "design a rate limiter for a multi-tenant API"        # default panel: claude, codex, gemini
+par fuse "is this migration safe to run on a live DB?" --panel cl,co,k
+par fuse "..." --judge co --judge-model gpt-5.4                    # choose the judge and its model
+par fuse "..." --context-from cl                                  # seed every panelist with your latest claude session here
+par fuse "..." --panel cl,co,g --dry-run                          # print every routed command (panel + judge), run nothing
+```
+
+| Flag | Purpose |
+| --- | --- |
+| `--panel <codes>` | Comma-separated panel agents (short codes allowed). Defaults to `claude,codex,gemini`. Needs ≥2; duplicates are allowed (self-pairing is a valid technique). |
+| `--judge <agent>` | Agent that synthesizes the panel. Defaults to **claude**. |
+| `--judge-model <m>` | Model for the judge. |
+| `--context-from <h[:s]>` | Prepend a prior session's transcript to every panelist, so the panel deliberates with your context (sources: `claude`, `codex`, `opencode`). |
+| `--max-context`, `--cwd`, `--no-yolo`, `--dry-run` | As in [`par ask`](#ask--one-agent-talks-to-another). |
+
+Panelists run **concurrently**, so wall-clock ≈ the slowest agent + the judge, and cost ≈ N+1 agent runs. A panelist whose CLI isn't installed is skipped with a note; fusion needs at least two to succeed. Alias: `par panel`.
+
+**Fuse selectively** — it's escalation, not autopilot. Reach for it on the calls where being wrong is expensive (design, security, migrations), and use a *diverse* panel (different vendors, not three of the same model). The [Fusion Playbook](docs/fusion-playbook.md) covers when to fuse, how to pick the panel, and the debate / wider-deeper patterns that stack on top.
 
 ---
 
@@ -317,16 +382,21 @@ par converse --a cl --b g -p "..." --a-model <m> --b-model <m> --dry-run
 
 Each turn spawns a full agent process, so cost and latency scale with `--turns`. The loop is two-party; `--until` is the way to end before the turn budget.
 
-## MCP — expose resume and ask to other agents
+## MCP — fuse, ask, and resume from inside your agent
 
-`par mcp` runs a small [MCP](https://modelcontextprotocol.io) server over stdio (newline-delimited JSON-RPC 2.0), so any MCP-capable agent can resume sessions in the current directory **and** ask other agents questions. This is how you say *"pick up my last conversation from Claude"* — or *"ask Gemini to review this, with my Claude context"* — from inside another agent.
+`par mcp` runs a small [MCP](https://modelcontextprotocol.io) server over stdio (newline-delimited JSON-RPC 2.0), so any MCP-capable agent can **convene a panel and fuse it**, ask other agents questions, and resume sessions — all from inside the agent you're already in. This is how you say *"fuse this across Codex and Gemini"*, *"ask Gemini to review this with my Claude context"*, or *"pick up my last conversation from Claude"* without leaving your agent.
 
 **Tools:**
 
+- **`fuse {prompt, panel?, judge?, judge_model?, cwd?, context_from?: {harness, session?}}`** — the collective-intelligence tool. Sends `prompt` to every agent in `panel` (default `claude,codex,gemini`) **in parallel**, then a judge agent (`judge`, default `claude`) synthesizes one answer — consensus as high-confidence, contradictions resolved, gaps filled, blind spots flagged — and returns it as text. `context_from` seeds every panelist with a prior session. Needs ≥2 panelists; ones whose CLI isn't installed are skipped with a note. (Same engine as the `par fuse` command.)
+- `ask_agent {harness, prompt, model?, provider?, cwd?, context_from?: {harness, session?}}` — run another agent headless and return its reply, optionally seeded with a session transcript. The agent-to-agent / context-bridge primitive.
 - `list_sessions {cwd?, harness?}` — resumable sessions for a directory, newest first.
 - `get_last_session {cwd?, harness?}` — the most recent session plus a ready-to-run resume command.
 - `resume_command {harness, id, cwd?, yolo?}` — build the native resume command for a session id (text; never spawns an interactive agent).
-- `ask_agent {harness, prompt, model?, provider?, cwd?, context_from?: {harness, session?}}` — run another agent headless and return its reply, optionally seeded with a session transcript. The agent-to-agent / context-bridge primitive.
+
+**Why `fuse` is also a tool, not just a command:** like OpenRouter's Fusion, fusion is *escalation, not autopilot* — exposing it as a tool lets the model decide a question is worth more than one opinion and convene the panel itself, mid-task, without you running anything. (The `par fuse` command does the same thing from the terminal.) Use a **diverse** panel (different vendors, not three of the same model). The [Fusion Playbook](docs/fusion-playbook.md) covers when to fuse and how to pick the panel; the debate (`par converse`) and wider→deeper patterns stack on top.
+
+> *"fuse this across codex and gemini: is this migration safe on a live DB?"* → the agent calls `fuse`, Parley runs Claude+Codex+Gemini in parallel, and the agent writes one answer grounded in all three.
 
 **Register it into an agent** — `par mcp connect` runs whatever that agent needs:
 
@@ -432,7 +502,8 @@ src/
   json.rs              zero-dep JSON parser/serializer (used by convert, session, ask, mcp)
   ask.rs               agent-to-agent calls (headless run + transcript context injection)
   converse.rs          multi-turn two-agent conversation loop
-  mcp.rs               stdio MCP server (resume tools + ask_agent) + `mcp connect`
+  fuse.rs              panel fusion engine — parallel panel + judge (`par fuse` and the mcp `fuse` tool)
+  mcp.rs               stdio MCP server (resume tools + ask_agent + fuse) + `mcp connect`
   harness/             per-agent adapters (claude, codex, cursor, gemini, goose,
                        opencode, qwen, aider, amazon_q, copilot, kimi, antigravity)
     mod.rs             Harness trait, Request, HarnessFactory, normalize_harness
@@ -481,7 +552,7 @@ impl Harness for ExampleHarness {
 
 Working infrastructure for local automation.
 
-**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run routing · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · stdio MCP server · validating setup script.
+**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run routing · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · panel fusion (`par fuse` + mcp `fuse` tool) · stdio MCP server · validating setup script.
 
 **Not yet:** GitHub Actions release builds · Homebrew formula · end-to-end smoke tests against every vendor CLI · a stable semver contract per agent mapping.
 
