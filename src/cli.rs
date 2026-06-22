@@ -76,6 +76,24 @@ pub(crate) struct ConverseOptions {
     pub dry_run: bool,
 }
 
+/// Options for `par fuse` — ask a panel of agents the same prompt in parallel,
+/// then have a judge agent synthesize one answer from their replies.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FuseOptions {
+    pub prompt: Option<String>,
+    /// Panel agents (short codes allowed). Empty => the default trio.
+    pub panel: Vec<String>,
+    /// Judge agent that synthesizes the panel. None => claude.
+    pub judge: Option<String>,
+    pub judge_model: Option<String>,
+    /// `harness[:session]` of a transcript to seed every panelist.
+    pub context_from: Option<String>,
+    pub max_context_chars: Option<usize>,
+    pub cwd: Option<String>,
+    pub yolo: bool,
+    pub dry_run: bool,
+}
+
 /// Options for `par mcp`. With no subcommand it runs the stdio server;
 /// `par mcp connect -h <harness>` registers this server into a harness.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -97,6 +115,7 @@ pub(crate) enum CliAction {
     Resume(ResumeOptions),
     Ask(AskOptions),
     Converse(ConverseOptions),
+    Fuse(FuseOptions),
     Mcp(McpOptions),
     Run(Box<CliOptions>),
 }
@@ -160,6 +179,10 @@ where
         Some("converse" | "debate" | "relay") => {
             args.next();
             return parse_converse_args(args);
+        }
+        Some("fuse" | "panel") => {
+            args.next();
+            return parse_fuse_args(args);
         }
         Some("mcp") => {
             args.next();
@@ -359,9 +382,20 @@ Converse (multi-turn, two agents):
   --a-model / --b-model <m>       Per-agent model;  also: --max-context, --cwd, --dry-run
   (aliases: par debate, par relay)
 
+Fuse (panel + judge — make answers smarter):
+  par fuse -p \"<task>\"            Ask a panel in parallel; a judge synthesizes one answer
+  par fuse \"<task>\" --panel cl,co,g
+                                  Pick the panel (default: claude,codex,gemini; needs >=2)
+  par fuse \"...\" --judge co --judge-model gpt-5.4
+                                  Choose the judge agent/model (default judge: claude)
+  par fuse \"...\" --context-from cl
+                                  Seed every panelist with your latest claude session here
+  --max-context, --cwd, --no-yolo, --dry-run as in ask   (alias: par panel)
+
 MCP:
   par mcp                         Run the stdio MCP server (JSON-RPC over stdin/stdout)
-                                  Tools: list_sessions, get_last_session, resume_command
+                                  Tools: list_sessions, get_last_session, resume_command, ask_agent, fuse
+                                  fuse = convene a panel of agents on one prompt; a judge synthesizes
   par mcp connect -h cl           Register this server into a harness (runs its native mcp add)
   par mcp connect -h oc           opencode/others may open their own add TUI
   par mcp connect -h cu           cursor has no add command; merges ~/.cursor/mcp.json
@@ -737,6 +771,78 @@ where
     Ok(CliAction::Converse(options))
 }
 
+fn parse_fuse_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    // Yolo defaults on: captured headless calls must not block on a prompt.
+    let mut options = FuseOptions {
+        yolo: true,
+        ..FuseOptions::default()
+    };
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" => return Ok(CliAction::Help),
+            "-p" | "--prompt" => options.prompt = Some(require_value(&mut args, "--prompt")?),
+            "--panel" => options.panel = parse_panel(&require_value(&mut args, "--panel")?),
+            "--judge" => options.judge = Some(require_value(&mut args, "--judge")?),
+            "--judge-model" => {
+                options.judge_model = Some(require_value(&mut args, "--judge-model")?)
+            }
+            "--context-from" | "--context" => {
+                options.context_from = Some(require_value(&mut args, "--context-from")?)
+            }
+            "--max-context" => {
+                let raw = require_value(&mut args, "--max-context")?;
+                options.max_context_chars = Some(
+                    raw.parse()
+                        .map_err(|_| format!("--max-context must be a number, got {raw}"))?,
+                );
+            }
+            "--cwd" => options.cwd = Some(require_value(&mut args, "--cwd")?),
+            "--yolo" => options.yolo = true,
+            "--no-yolo" => options.yolo = false,
+            "--dry-run" => options.dry_run = true,
+            _ if arg.starts_with("--panel=") => {
+                options.panel = parse_panel(&value_after_equals(&arg, "--panel="))
+            }
+            _ if arg.starts_with("--judge=") => {
+                options.judge = Some(value_after_equals(&arg, "--judge="))
+            }
+            _ if arg.starts_with("--context-from=") => {
+                options.context_from = Some(value_after_equals(&arg, "--context-from="))
+            }
+            _ if arg.starts_with("--cwd=") => {
+                options.cwd = Some(value_after_equals(&arg, "--cwd="))
+            }
+            _ if arg.starts_with('-') => return Err(format!("unknown fuse option: {arg}")),
+            // Bare text accumulates into the prompt.
+            _ => {
+                options.prompt = Some(match options.prompt {
+                    Some(existing) => format!("{existing} {arg}"),
+                    None => arg,
+                });
+            }
+        }
+    }
+
+    if options.prompt.is_none() {
+        return Err("fuse requires a prompt: par fuse -p \"<task>\" --panel cl,co,g".to_string());
+    }
+    Ok(CliAction::Fuse(options))
+}
+
+/// Split a comma-separated `--panel` value into agent codes, dropping blanks.
+fn parse_panel(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn parse_mcp_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
 where
     I: Iterator<Item = String>,
@@ -965,6 +1071,49 @@ mod tests {
                 dry_run: false,
             })
         );
+    }
+
+    #[test]
+    fn parses_fuse_action() {
+        let action = parse_args(
+            [
+                "fuse",
+                "--panel",
+                "cl, co , g",
+                "--judge",
+                "co",
+                "-p",
+                "design X",
+            ]
+            .map(String::from),
+            defaults(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            action,
+            CliAction::Fuse(FuseOptions {
+                prompt: Some("design X".to_string()),
+                panel: vec!["cl".to_string(), "co".to_string(), "g".to_string()],
+                judge: Some("co".to_string()),
+                yolo: true,
+                ..FuseOptions::default()
+            })
+        );
+    }
+
+    #[test]
+    fn fuse_alias_panel_and_bare_prompt() {
+        let action = parse_args(
+            ["panel", "design", "a", "limiter"].map(String::from),
+            defaults(),
+        )
+        .unwrap();
+        let CliAction::Fuse(opts) = action else {
+            panic!("expected fuse action");
+        };
+        assert_eq!(opts.prompt, Some("design a limiter".to_string()));
+        assert!(opts.panel.is_empty());
     }
 
     #[test]

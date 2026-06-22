@@ -5,10 +5,11 @@
 //! scoped, like every harness's own `--resume`, to a working directory.
 //!
 //! Built on the crate's zero-dependency `Json` type. The protocol surface is
-//! intentionally small: `initialize`, `tools/list`, and `tools/call` with four
-//! tools — three for session discovery/resume, plus `ask_agent` for one-shot
-//! agent-to-agent calls. Resume tools return *commands* as text and never spawn
-//! an interactive harness; `ask_agent` runs the target agent headless.
+//! intentionally small: `initialize`, `tools/list`, and `tools/call` with five
+//! tools — three for session discovery/resume, `ask_agent` for one-shot
+//! agent-to-agent calls, and `fuse` to convene a panel of agents on one prompt.
+//! Resume tools return *commands* as text and never spawn an interactive
+//! harness; `ask_agent` and `fuse` run the target agents headless.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ask::{self, AskRequest, ContextRef};
 use crate::cli::McpOptions;
+use crate::fuse;
 use crate::harness::{normalize_harness, Invocation};
 use crate::json::Json;
 use crate::process::run_invocation;
@@ -291,9 +293,50 @@ fn tools_list_result() -> Json {
         vec!["harness", "prompt"],
     );
 
+    let fuse_tool = tool(
+        "fuse",
+        "Convene a PANEL of agents on one prompt and get back a single, stronger synthesized answer. Sends `prompt` to every agent in `panel` in parallel, then a judge agent (Claude by default) fuses their replies: consensus is high-confidence, contradictions are resolved, gaps filled, blind spots flagged. Use on high-stakes questions where being wrong is expensive (design, security, migrations, hard trade-offs) and a diverse panel (different vendors) beats any single model. Seed the panel with a prior session via `context_from`. Returns the fused answer as text.",
+        obj(vec![
+            ("prompt", str_prop("The question or task to put to the whole panel.")),
+            (
+                "panel",
+                obj(vec![
+                    ("type", Json::Str("array".to_string())),
+                    ("items", obj(vec![("type", Json::Str("string".to_string()))])),
+                    (
+                        "description",
+                        Json::Str("Panel agents (shorthands allowed), e.g. [\"claude\",\"codex\",\"gemini\"]. Needs at least 2; duplicates allowed. Defaults to claude,codex,gemini.".to_string()),
+                    ),
+                ]),
+            ),
+            ("judge", str_prop("Agent that synthesizes the panel into the final answer. Defaults to claude.")),
+            ("judge_model", str_prop("Optional model override for the judge.")),
+            ("cwd", str_prop("Working directory (defaults to the server's cwd).")),
+            (
+                "context_from",
+                obj(vec![
+                    ("type", Json::Str("object".to_string())),
+                    (
+                        "description",
+                        Json::Str("Seed every panelist with another agent's session transcript.".to_string()),
+                    ),
+                    (
+                        "properties",
+                        obj(vec![
+                            ("harness", str_prop("Source agent (claude, codex, opencode).")),
+                            ("session", str_prop("Session id, or 'latest' / omitted for the newest in cwd.")),
+                        ]),
+                    ),
+                    ("required", Json::Array(vec![Json::Str("harness".to_string())])),
+                ]),
+            ),
+        ]),
+        vec!["prompt"],
+    );
+
     obj(vec![(
         "tools",
-        Json::Array(vec![list_tool, last_tool, resume_tool, ask_tool]),
+        Json::Array(vec![list_tool, last_tool, resume_tool, ask_tool, fuse_tool]),
     )])
 }
 
@@ -377,6 +420,77 @@ fn call_tool(request: &Json, default_cwd: &Path) -> Result<Json, (i64, String)> 
                     Ok(text_content(&format!("{harness} failed: {msg}"), true))
                 }
                 Err(e) => Ok(text_content(&e, true)),
+            }
+        }
+        "fuse" => {
+            let prompt = args
+                .get("prompt")
+                .and_then(Json::as_str)
+                .ok_or((-32602, "missing prompt".to_string()))?;
+
+            // Panel: explicit array of agent codes, else the default trio.
+            let panel_arg: Vec<String> = match args.get("panel").and_then(Json::as_array) {
+                Some(items) => items
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .map(str::to_string)
+                    .collect(),
+                None => Vec::new(),
+            };
+            let panel = match fuse::resolve_panel(&panel_arg) {
+                Ok(p) => p,
+                Err(e) => return Ok(text_content(&e, true)),
+            };
+
+            let context = args.get("context_from").and_then(|c| {
+                c.get("harness").and_then(Json::as_str).map(|h| ContextRef {
+                    harness: h.to_string(),
+                    session: c
+                        .get("session")
+                        .and_then(Json::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                })
+            });
+            let max_context = args
+                .get("max_context")
+                .and_then(Json::as_number)
+                .map(|n| n as usize)
+                .unwrap_or(session::DEFAULT_CONTEXT_CHARS);
+            let judge = normalize_harness(
+                args.get("judge")
+                    .and_then(Json::as_str)
+                    .unwrap_or(fuse::DEFAULT_JUDGE),
+            );
+            let judge_model = args
+                .get("judge_model")
+                .and_then(Json::as_str)
+                .map(str::to_string);
+
+            // Fan the prompt out to the panel in parallel, then have the judge
+            // (Claude by default) synthesize one answer from the replies.
+            let (answers, skipped) = fuse::split_replies(fuse::run_panel(
+                prompt,
+                &panel,
+                context,
+                &cwd,
+                max_context,
+                true,
+            ));
+            if answers.len() < 2 {
+                return Ok(text_content(
+                    &fuse::insufficient_panel_message(answers.len(), &skipped),
+                    true,
+                ));
+            }
+            let note = if skipped.is_empty() {
+                String::new()
+            } else {
+                format!("(skipped: {})\n\n", skipped.join(", "))
+            };
+            match fuse::run_judge(prompt, &answers, &judge, judge_model, &cwd, max_context) {
+                Ok(fused) => Ok(text_content(&format!("{note}{fused}"), false)),
+                Err(e) => Ok(text_content(&format!("judge {judge} failed: {e}"), true)),
             }
         }
         other => Err((-32602, format!("unknown tool: {other}"))),
@@ -505,7 +619,7 @@ mod tests {
             .and_then(|r| r.get("tools"))
             .and_then(Json::as_array)
             .unwrap();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 5);
         let names: Vec<_> = tools
             .iter()
             .filter_map(|t| t.get("name").and_then(Json::as_str))
@@ -514,6 +628,7 @@ mod tests {
         assert!(names.contains(&"get_last_session"));
         assert!(names.contains(&"resume_command"));
         assert!(names.contains(&"ask_agent"));
+        assert!(names.contains(&"fuse"));
     }
 
     #[test]
