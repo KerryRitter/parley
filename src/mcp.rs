@@ -13,25 +13,37 @@
 
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::ask::{self, AskRequest, ContextRef};
 use crate::cli::McpOptions;
 use crate::fuse;
 use crate::harness::{normalize_harness, Invocation};
 use crate::json::Json;
-use crate::process::run_invocation;
+use crate::process::{capture_streaming, run_invocation};
 use crate::session;
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
+/// Protocol version we advertise by default. We echo the client's requested
+/// version when it's one we recognise (see [`SUPPORTED_PROTOCOLS`]); the
+/// `message` field on progress notifications requires >= 2025-03-26.
+const PROTOCOL_VERSION: &str = "2025-06-18";
+const SUPPORTED_PROTOCOLS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
+
+/// How often the heartbeat thread emits "still working" progress while a child
+/// agent runs, so the caller sees motion even when the child buffers output.
+const HEARTBEAT_SECS: u64 = 5;
+/// Max characters of a streamed line forwarded as a progress message.
+const MAX_PROGRESS_MSG: usize = 160;
 
 pub(crate) fn run(_options: McpOptions) -> Result<(), String> {
     let cwd = env::current_dir().map_err(|e| format!("failed to get cwd: {e}"))?;
     let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
 
     for line in stdin.lock().lines() {
         let line = line.map_err(|e| format!("stdin read error: {e}"))?;
@@ -44,13 +56,179 @@ pub(crate) fn run(_options: McpOptions) -> Result<(), String> {
             Err(_) => Some(error_response(&Json::Null, -32700, "parse error")),
         };
         if let Some(response) = response {
-            writeln!(out, "{}", response.to_compact_string())
-                .map_err(|e| format!("stdout write error: {e}"))?;
-            out.flush()
-                .map_err(|e| format!("stdout flush error: {e}"))?;
+            emit(&response);
         }
     }
     Ok(())
+}
+
+/// Write one newline-delimited JSON-RPC message to stdout, locking and flushing
+/// per call. Used for both responses and progress notifications so a heartbeat
+/// thread can emit safely while the main thread blocks on a child agent.
+fn emit(message: &Json) {
+    let stdout = io::stdout();
+    let mut lock = stdout.lock();
+    let _ = writeln!(lock, "{}", message.to_compact_string());
+    let _ = lock.flush();
+}
+
+/// Progress sink for one long-running tool call. Each `send` does two things:
+/// emits an MCP `notifications/progress` (if the client attached a
+/// `progressToken`) and appends a timestamped line to a live log file. The log
+/// is the reliable channel — `tail -f` shows motion regardless of whether the
+/// MCP client re-renders progress notifications. Cloneable across threads
+/// (heartbeat + streaming reader both emit through it); `progress` increases
+/// monotonically as the spec requires.
+struct Progress {
+    token: Option<Json>,
+    counter: AtomicU64,
+    log: Option<Mutex<File>>,
+    start: Instant,
+}
+
+impl Progress {
+    fn new(token: Option<Json>, log: Option<File>) -> Arc<Self> {
+        Arc::new(Self {
+            token,
+            counter: AtomicU64::new(0),
+            log: log.map(Mutex::new),
+            start: Instant::now(),
+        })
+    }
+
+    /// Read `params._meta.progressToken` from a `tools/call` request.
+    fn token_of(request: &Json) -> Option<Json> {
+        request
+            .get("params")
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get("progressToken"))
+            .cloned()
+    }
+
+    fn send(&self, message: &str) {
+        if let Some(log) = self.log.as_ref() {
+            if let Ok(mut file) = log.lock() {
+                let secs = self.start.elapsed().as_secs();
+                let _ = writeln!(file, "[{secs:>4}s] {message}");
+                let _ = file.flush();
+            }
+        }
+        let Some(token) = self.token.as_ref() else {
+            return;
+        };
+        let n = self.counter.fetch_add(1, Ordering::SeqCst) + 1;
+        emit(&obj(vec![
+            ("jsonrpc", Json::Str("2.0".to_string())),
+            ("method", Json::Str("notifications/progress".to_string())),
+            (
+                "params",
+                obj(vec![
+                    ("progressToken", token.clone()),
+                    ("progress", Json::Number(n as f64)),
+                    ("message", Json::Str(message.to_string())),
+                ]),
+            ),
+        ]));
+    }
+}
+
+/// Stable path for the live progress log, under the same config root as the
+/// defaults file (`$XDG_CONFIG_HOME/par/` or `~/.config/par/`).
+fn live_log_path() -> Option<PathBuf> {
+    let base = env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| env::var("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .ok()?;
+    let dir = base.join("par").join("live");
+    fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("ask.log"))
+}
+
+/// Build a [`Progress`] for a long-running tool: extracts the client's progress
+/// token and opens (truncating) the live log. Returns the log path so the caller
+/// can tell the user what to `tail -f`. Both channels are best-effort.
+fn make_progress(request: &Json) -> (Arc<Progress>, Option<String>) {
+    let token = Progress::token_of(request);
+    match live_log_path() {
+        Some(path) => {
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&path)
+                .ok();
+            let display = file.as_ref().map(|_| path.display().to_string());
+            (Progress::new(token, file), display)
+        }
+        None => (Progress::new(token, None), None),
+    }
+}
+
+/// Run `f` while a background thread emits a periodic "still working" heartbeat,
+/// so the caller sees progress even when the child produces no output until it
+/// finishes. The heartbeat is stopped and joined before `f`'s value is returned,
+/// so no stray notification can land after the tool result.
+fn with_heartbeat<T>(progress: &Arc<Progress>, label: &str, f: impl FnOnce() -> T) -> T {
+    let done = Arc::new(AtomicBool::new(false));
+    let handle = {
+        let progress = Arc::clone(progress);
+        let done = Arc::clone(&done);
+        let label = label.to_string();
+        thread::spawn(move || {
+            let mut elapsed = 0u64;
+            loop {
+                thread::park_timeout(Duration::from_secs(HEARTBEAT_SECS));
+                if done.load(Ordering::SeqCst) {
+                    break;
+                }
+                elapsed += HEARTBEAT_SECS;
+                progress.send(&format!("{label} — still working ({elapsed}s)"));
+            }
+        })
+    };
+
+    let out = f();
+
+    done.store(true, Ordering::SeqCst);
+    handle.thread().unpark();
+    let _ = handle.join();
+    out
+}
+
+/// Strip ANSI escapes and control characters so agent output is safe to surface
+/// (in a progress message or an error). Collapses runs of whitespace lightly by
+/// turning control chars into spaces.
+fn scrub(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // Drop the escape sequence up to and including its final letter.
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else if c.is_control() {
+            out.push(' ');
+        } else {
+            out.push(c);
+        }
+    }
+    out.trim().to_string()
+}
+
+/// [`scrub`] a streamed line and clamp it to [`MAX_PROGRESS_MSG`] characters.
+fn progress_line(raw: &str) -> String {
+    let line = scrub(raw);
+    if line.chars().count() <= MAX_PROGRESS_MSG {
+        line
+    } else {
+        let mut clamped: String = line.chars().take(MAX_PROGRESS_MSG.saturating_sub(1)).collect();
+        clamped.push('…');
+        clamped
+    }
 }
 
 /// Register `par mcp` as an MCP server inside a harness. For harnesses with a
@@ -159,7 +337,7 @@ pub(crate) fn handle_request(request: &Json, default_cwd: &Path) -> Option<Json>
     let id = request.get("id")?;
 
     let result = match method {
-        "initialize" => Ok(initialize_result()),
+        "initialize" => Ok(initialize_result(request)),
         "tools/list" => Ok(tools_list_result()),
         "tools/call" => call_tool(request, default_cwd),
         "ping" => Ok(obj(vec![])),
@@ -172,9 +350,17 @@ pub(crate) fn handle_request(request: &Json, default_cwd: &Path) -> Option<Json>
     })
 }
 
-fn initialize_result() -> Json {
+fn initialize_result(request: &Json) -> Json {
+    // Echo the client's requested protocol version when we recognise it (so the
+    // progress `message` field, added in 2025-03-26, is honoured), else default.
+    let version = request
+        .get("params")
+        .and_then(|p| p.get("protocolVersion"))
+        .and_then(Json::as_str)
+        .filter(|v| SUPPORTED_PROTOCOLS.contains(v))
+        .unwrap_or(PROTOCOL_VERSION);
     obj(vec![
-        ("protocolVersion", Json::Str(PROTOCOL_VERSION.to_string())),
+        ("protocolVersion", Json::Str(version.to_string())),
         ("capabilities", obj(vec![("tools", obj(vec![]))])),
         (
             "serverInfo",
@@ -391,7 +577,7 @@ fn call_tool(request: &Json, default_cwd: &Path) -> Result<Json, (i64, String)> 
                         .to_string(),
                 })
             });
-            let request = AskRequest {
+            let ask_req = AskRequest {
                 harness: harness.to_string(),
                 prompt: prompt.to_string(),
                 model: args.get("model").and_then(Json::as_str).map(str::to_string),
@@ -409,14 +595,43 @@ fn call_tool(request: &Json, default_cwd: &Path) -> Result<Json, (i64, String)> 
                     .map(|n| n as usize)
                     .unwrap_or(session::DEFAULT_CONTEXT_CHARS),
             };
-            match ask::run(&request) {
-                Ok(out) if out.success => Ok(text_content(out.stdout.trim(), false)),
+            let model_label = ask_req
+                .model
+                .clone()
+                .unwrap_or_else(|| "default model".to_string());
+            let (progress, log_path) = make_progress(request);
+            let hint = log_path
+                .map(|p| format!(" · live: tail -f {p}"))
+                .unwrap_or_default();
+            progress.send(&format!("Asking {harness} ({model_label})…{hint}"));
+
+            let invocation = match ask::build(&ask_req) {
+                Ok(invocation) => invocation,
+                Err(e) => return Ok(text_content(&e, true)),
+            };
+            let cwd_str = ask_req.cwd.to_str().map(str::to_string);
+            let line_progress = Arc::clone(&progress);
+            let captured = with_heartbeat(&progress, harness, || {
+                capture_streaming(invocation, cwd_str.as_deref(), |line| {
+                    let line = progress_line(line);
+                    if !line.is_empty() {
+                        line_progress.send(&line);
+                    }
+                })
+            });
+
+            match captured {
+                Ok(out) if out.success => {
+                    progress.send("done");
+                    Ok(text_content(out.stdout.trim(), false))
+                }
                 Ok(out) => {
                     let msg = if out.stderr.trim().is_empty() {
-                        out.stdout.trim().to_string()
+                        scrub(&out.stdout)
                     } else {
-                        out.stderr.trim().to_string()
+                        scrub(&out.stderr)
                     };
+                    progress.send("failed");
                     Ok(text_content(&format!("{harness} failed: {msg}"), true))
                 }
                 Err(e) => Ok(text_content(&e, true)),
@@ -469,14 +684,21 @@ fn call_tool(request: &Json, default_cwd: &Path) -> Result<Json, (i64, String)> 
 
             // Fan the prompt out to the panel in parallel, then have the judge
             // (Claude by default) synthesize one answer from the replies.
-            let (answers, skipped) = fuse::split_replies(fuse::run_panel(
-                prompt,
-                &panel,
-                context,
-                &cwd,
-                max_context,
-                true,
-            ));
+            let (progress, log_path) = make_progress(request);
+            let hint = log_path
+                .map(|p| format!(" · live: tail -f {p}"))
+                .unwrap_or_default();
+            progress.send(&format!("Convening panel: {}…{hint}", panel.join(", ")));
+            let (answers, skipped) = with_heartbeat(&progress, "panel", || {
+                fuse::split_replies(fuse::run_panel(
+                    prompt,
+                    &panel,
+                    context,
+                    &cwd,
+                    max_context,
+                    true,
+                ))
+            });
             if answers.len() < 2 {
                 return Ok(text_content(
                     &fuse::insufficient_panel_message(answers.len(), &skipped),
@@ -488,8 +710,19 @@ fn call_tool(request: &Json, default_cwd: &Path) -> Result<Json, (i64, String)> 
             } else {
                 format!("(skipped: {})\n\n", skipped.join(", "))
             };
-            match fuse::run_judge(prompt, &answers, &judge, judge_model, &cwd, max_context) {
-                Ok(fused) => Ok(text_content(&format!("{note}{fused}"), false)),
+            let replied: Vec<&str> = answers.iter().map(|(label, _)| label.as_str()).collect();
+            progress.send(&format!(
+                "Panel replied ({}). Judging with {judge}…",
+                replied.join(", ")
+            ));
+            let fused = with_heartbeat(&progress, &format!("judge {judge}"), || {
+                fuse::run_judge(prompt, &answers, &judge, judge_model, &cwd, max_context)
+            });
+            match fused {
+                Ok(fused) => {
+                    progress.send("done");
+                    Ok(text_content(&format!("{note}{fused}"), false))
+                }
                 Err(e) => Ok(text_content(&format!("judge {judge} failed: {e}"), true)),
             }
         }
