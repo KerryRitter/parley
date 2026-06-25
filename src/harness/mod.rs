@@ -697,6 +697,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(invocation.command, "agy");
-        assert_eq!(invocation.args, vec!["review this"]);
+        assert_eq!(
+            invocation.args,
+            vec!["--print", "review this", "--model", "gemini-3-pro"]
+        );
     }
 }
