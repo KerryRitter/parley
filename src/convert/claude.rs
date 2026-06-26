@@ -51,11 +51,7 @@ fn read_commands(root: &Path) -> Result<Vec<CommandFile>, String> {
     Ok(files)
 }
 
-fn collect_md_files(
-    base: &Path,
-    dir: &Path,
-    out: &mut Vec<CommandFile>,
-) -> Result<(), String> {
+fn collect_md_files(base: &Path, dir: &Path, out: &mut Vec<CommandFile>) -> Result<(), String> {
     let entries =
         fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
 
@@ -203,8 +199,8 @@ fn read_mcp_json(root: &Path) -> Result<Vec<(String, McpServer)>, String> {
         return Ok(Vec::new());
     }
 
-    let text = fs::read_to_string(&path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let text =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let json = Json::parse(&text).map_err(|e| format!("failed to parse .mcp.json: {e}"))?;
 
     let servers_obj = match json.get("mcpServers") {
@@ -245,10 +241,7 @@ fn read_mcp_json(root: &Path) -> Result<Vec<(String, McpServer)>, String> {
             })
             .unwrap_or_default();
 
-        let cwd = value
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let cwd = value.get("cwd").and_then(|v| v.as_str()).map(String::from);
 
         let disabled = value
             .get("disabled")

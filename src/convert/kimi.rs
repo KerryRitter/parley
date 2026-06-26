@@ -27,11 +27,7 @@ fn write_agents_md(
     dry_run: bool,
     created: &mut Vec<String>,
 ) -> Result<(), String> {
-    let content = format!(
-        "{}\n{}\n",
-        HEADER,
-        config.build_self_contained().trim_end()
-    );
+    let content = format!("{}\n{}\n", HEADER, config.build_self_contained().trim_end());
     write_file(root, "AGENTS.md", &content, dry_run, created)
 }
 
@@ -114,7 +110,13 @@ fn write_kimi_mcp(
         m
     });
 
-    write_file(root, ".kimi/mcp.json", &json.to_pretty_string(), dry_run, created)
+    write_file(
+        root,
+        ".kimi/mcp.json",
+        &json.to_pretty_string(),
+        dry_run,
+        created,
+    )
 }
 
 fn write_file(

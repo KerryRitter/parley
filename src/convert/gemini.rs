@@ -6,7 +6,11 @@ use crate::json::Json;
 
 use super::project::ProjectConfig;
 
-pub(crate) fn write(root: &Path, config: &ProjectConfig, dry_run: bool) -> Result<Vec<String>, String> {
+pub(crate) fn write(
+    root: &Path,
+    config: &ProjectConfig,
+    dry_run: bool,
+) -> Result<Vec<String>, String> {
     let mut created = Vec::new();
 
     write_gemini_md(root, config, dry_run, &mut created)?;
@@ -22,11 +26,7 @@ fn write_gemini_md(
     dry_run: bool,
     created: &mut Vec<String>,
 ) -> Result<(), String> {
-    let content = format!(
-        "{}\n{}\n",
-        HEADER,
-        config.build_self_contained().trim_end()
-    );
+    let content = format!("{}\n{}\n", HEADER, config.build_self_contained().trim_end());
     write_file(root, "GEMINI.md", &content, dry_run, created)
 }
 
@@ -42,8 +42,7 @@ fn write_gemini_commands(
             fs::remove_dir_all(&dir)
                 .map_err(|e| format!("failed to remove .gemini/commands: {e}"))?;
         }
-        fs::create_dir_all(&dir)
-            .map_err(|e| format!("failed to create .gemini/commands: {e}"))?;
+        fs::create_dir_all(&dir).map_err(|e| format!("failed to create .gemini/commands: {e}"))?;
     }
 
     for cmd in &config.commands {
@@ -85,10 +84,7 @@ fn write_gemini_settings(
 
     let mut tools = BTreeMap::new();
     let mut shell_opts = BTreeMap::new();
-    shell_opts.insert(
-        "enableToolOutputTruncation".to_string(),
-        Json::Bool(true),
-    );
+    shell_opts.insert("enableToolOutputTruncation".to_string(), Json::Bool(true));
     shell_opts.insert(
         "toolOutputTruncationThreshold".to_string(),
         Json::Number(200000.0),
@@ -106,10 +102,15 @@ fn write_gemini_settings(
     let json = Json::Object(top);
     let dir = root.join(".gemini");
     if !dry_run {
-        fs::create_dir_all(&dir)
-            .map_err(|e| format!("failed to create .gemini: {e}"))?;
+        fs::create_dir_all(&dir).map_err(|e| format!("failed to create .gemini: {e}"))?;
     }
-    write_file(root, ".gemini/settings.json", &json.to_pretty_string(), dry_run, created)
+    write_file(
+        root,
+        ".gemini/settings.json",
+        &json.to_pretty_string(),
+        dry_run,
+        created,
+    )
 }
 
 fn write_file(

@@ -6,7 +6,11 @@ use crate::json::Json;
 
 use super::project::ProjectConfig;
 
-pub(crate) fn write(root: &Path, config: &ProjectConfig, dry_run: bool) -> Result<Vec<String>, String> {
+pub(crate) fn write(
+    root: &Path,
+    config: &ProjectConfig,
+    dry_run: bool,
+) -> Result<Vec<String>, String> {
     let mut created = Vec::new();
 
     let mut top = BTreeMap::new();
@@ -62,7 +66,13 @@ pub(crate) fn write(root: &Path, config: &ProjectConfig, dry_run: bool) -> Resul
         fs::create_dir_all(root.join(".opencode"))
             .map_err(|e| format!("failed to create .opencode: {e}"))?;
     }
-    write_file(root, ".opencode/config.json", &json.to_pretty_string(), dry_run, &mut created)?;
+    write_file(
+        root,
+        ".opencode/config.json",
+        &json.to_pretty_string(),
+        dry_run,
+        &mut created,
+    )?;
 
     Ok(created)
 }

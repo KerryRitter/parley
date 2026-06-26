@@ -61,7 +61,8 @@ mod tests {
     fn temp_dir(tag: &str) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("par-kimi-{}-{}-{}", std::process::id(), tag, n));
+        let dir =
+            std::env::temp_dir().join(format!("par-kimi-{}-{}-{}", std::process::id(), tag, n));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -93,7 +94,10 @@ mod tests {
             invocation.args.iter().any(|a| a == "--mcp-config-file"),
             "missing flag in {joined}"
         );
-        assert!(joined.contains(".kimi/mcp.json"), "missing path in {joined}");
+        assert!(
+            joined.contains(".kimi/mcp.json"),
+            "missing path in {joined}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -126,7 +130,10 @@ mod tests {
 
         let invocation = build(&dir, "go");
         let joined = invocation.args.join(" ");
-        assert!(joined.contains(".kimi/mcp.json"), "expected .kimi path in {joined}");
+        assert!(
+            joined.contains(".kimi/mcp.json"),
+            "expected .kimi path in {joined}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

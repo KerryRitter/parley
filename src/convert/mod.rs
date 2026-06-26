@@ -29,7 +29,14 @@ pub(crate) enum ConvertTarget {
     One(String),
 }
 
-const ALL_TARGETS: &[&str] = &["gemini", "codex", "antigravity", "opencode", "cursor", "kimi"];
+const ALL_TARGETS: &[&str] = &[
+    "gemini",
+    "codex",
+    "antigravity",
+    "opencode",
+    "cursor",
+    "kimi",
+];
 
 pub(crate) fn run_convert(options: ConvertOptions) -> Result<(), String> {
     let root = resolve_root(&options)?;
@@ -94,10 +101,7 @@ fn validate_source(name: &str) -> Result<String, String> {
     }
 }
 
-fn read_source(
-    root: &std::path::Path,
-    source: &str,
-) -> Result<project::ProjectConfig, String> {
+fn read_source(root: &std::path::Path, source: &str) -> Result<project::ProjectConfig, String> {
     match source {
         "claude" => claude::read(root),
         _ => Err(format!("no reader for \"{source}\"")),
@@ -166,7 +170,11 @@ mod tests {
         fs::create_dir_all(root.join(".claude/skills")).unwrap();
         fs::create_dir_all(root.join(".claude/references")).unwrap();
 
-        fs::write(root.join("CLAUDE.md"), "# Test Project\n\nInstructions here.\n").unwrap();
+        fs::write(
+            root.join("CLAUDE.md"),
+            "# Test Project\n\nInstructions here.\n",
+        )
+        .unwrap();
         fs::write(
             root.join(".claude/commands/dev.md"),
             "# /dev - Start development\n\nRun the dev server.\n",
@@ -281,20 +289,15 @@ mod tests {
         assert!(files.iter().any(|f| f.contains(".agents/skills/")));
 
         // Verify SKILL.md format (no source-command- prefix; marker present)
-        let skill = fs::read_to_string(
-            tmp.path().join(".agents/skills/dev/SKILL.md"),
-        )
-        .unwrap();
+        let skill = fs::read_to_string(tmp.path().join(".agents/skills/dev/SKILL.md")).unwrap();
         assert!(skill.starts_with("---\nname: dev\n"));
         assert!(skill.contains("description: |"));
         assert!(skill.contains("par-convert:generated"));
         assert!(skill.contains("Run the dev server."));
 
         // Skill name matches directory (path-slugged, prefix dropped)
-        let skill_git = fs::read_to_string(
-            tmp.path().join(".agents/skills/git-merge/SKILL.md"),
-        )
-        .unwrap();
+        let skill_git =
+            fs::read_to_string(tmp.path().join(".agents/skills/git-merge/SKILL.md")).unwrap();
         assert!(skill_git.contains("name: git-merge\n"));
 
         // No plugin system files
@@ -349,13 +352,17 @@ mod tests {
         let files = cursor::write(tmp.path(), &config, false).unwrap();
         assert!(files.contains(&".cursor/rules/instructions.mdc".to_string()));
         assert!(files.contains(&".cursor/mcp.json".to_string()));
-        assert!(files.iter().any(|f| f.ends_with(".mdc") && f.contains("commands/")));
+        assert!(files
+            .iter()
+            .any(|f| f.ends_with(".mdc") && f.contains("commands/")));
 
-        let instructions = fs::read_to_string(tmp.path().join(".cursor/rules/instructions.mdc")).unwrap();
+        let instructions =
+            fs::read_to_string(tmp.path().join(".cursor/rules/instructions.mdc")).unwrap();
         assert!(instructions.contains("alwaysApply: true"));
         assert!(instructions.contains("Test Project"));
 
-        let cmd_rule = fs::read_to_string(tmp.path().join(".cursor/rules/commands/dev.mdc")).unwrap();
+        let cmd_rule =
+            fs::read_to_string(tmp.path().join(".cursor/rules/commands/dev.mdc")).unwrap();
         assert!(cmd_rule.contains("alwaysApply: false"));
         assert!(cmd_rule.contains("/dev:"));
 
@@ -377,10 +384,7 @@ mod tests {
         // No KIMI.md
         assert!(!tmp.path().join("KIMI.md").exists());
 
-        let skill = fs::read_to_string(
-            tmp.path().join(".kimi/skills/dev/SKILL.md"),
-        )
-        .unwrap();
+        let skill = fs::read_to_string(tmp.path().join(".kimi/skills/dev/SKILL.md")).unwrap();
         assert!(skill.contains("name: dev\n"));
         assert!(skill.contains("description: |"));
         assert!(skill.contains("par-convert:generated"));

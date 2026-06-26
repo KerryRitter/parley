@@ -25,11 +25,7 @@ fn write_agents_md(
     dry_run: bool,
     created: &mut Vec<String>,
 ) -> Result<(), String> {
-    let content = format!(
-        "{}\n{}\n",
-        HEADER,
-        config.build_self_contained().trim_end()
-    );
+    let content = format!("{}\n{}\n", HEADER, config.build_self_contained().trim_end());
     write_file(root, "AGENTS.md", &content, dry_run, created)
 }
 
@@ -44,8 +40,7 @@ fn write_plugin(
     if !dry_run {
         let full = root.join(&plugin_dir);
         if full.exists() {
-            fs::remove_dir_all(&full)
-                .map_err(|e| format!("failed to remove {plugin_dir}: {e}"))?;
+            fs::remove_dir_all(&full).map_err(|e| format!("failed to remove {plugin_dir}: {e}"))?;
         }
     }
 
@@ -107,11 +102,7 @@ fn write_plugin(
     }
 
     // rules/ — self-contained instructions
-    let instructions = format!(
-        "{}\n{}\n",
-        HEADER,
-        config.build_self_contained().trim_end()
-    );
+    let instructions = format!("{}\n{}\n", HEADER, config.build_self_contained().trim_end());
     write_file(
         root,
         &format!("{plugin_dir}/rules/{}-instructions.md", config.name),

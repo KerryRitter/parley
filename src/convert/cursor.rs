@@ -35,7 +35,13 @@ fn write_instructions_rule(
         "---\ndescription: \"Project instructions and reference documentation\"\nalwaysApply: true\n---\n\n{}\n",
         body.trim_end()
     );
-    write_file(root, ".cursor/rules/instructions.mdc", &content, dry_run, created)
+    write_file(
+        root,
+        ".cursor/rules/instructions.mdc",
+        &content,
+        dry_run,
+        created,
+    )
 }
 
 fn write_command_rules(
@@ -109,7 +115,13 @@ fn write_mcp_json(
         m
     });
 
-    write_file(root, ".cursor/mcp.json", &json.to_pretty_string(), dry_run, created)
+    write_file(
+        root,
+        ".cursor/mcp.json",
+        &json.to_pretty_string(),
+        dry_run,
+        created,
+    )
 }
 
 fn write_file(

@@ -24,11 +24,7 @@ fn write_agents_md(
     dry_run: bool,
     created: &mut Vec<String>,
 ) -> Result<(), String> {
-    let content = format!(
-        "{}\n{}\n",
-        HEADER,
-        config.build_self_contained().trim_end()
-    );
+    let content = format!("{}\n{}\n", HEADER, config.build_self_contained().trim_end());
     write_file(root, "AGENTS.md", &content, dry_run, created)
 }
 
