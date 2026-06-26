@@ -9,6 +9,7 @@ mod gemini;
 mod goose;
 mod invocation;
 mod kimi;
+mod meta;
 mod opencode;
 mod qwen;
 
@@ -28,6 +29,7 @@ pub(crate) trait Harness {
     fn build(&self, request: &Request) -> Result<Invocation, String>;
 }
 
+#[derive(Clone)]
 pub(crate) struct Request {
     pub harness: String,
     pub provider: Option<String>,
@@ -183,6 +185,10 @@ impl Default for HarnessFactory {
             ("copilot", copilot::new as HarnessConstructor),
             ("kimi", kimi::new as HarnessConstructor),
             ("qwen", qwen::new as HarnessConstructor),
+            // Meta-harnesses: harnesses that call back into `par` itself.
+            ("auto", meta::auto as HarnessConstructor),
+            ("fuse", meta::fuse as HarnessConstructor),
+            ("solve", meta::solve as HarnessConstructor),
         ]
         .into_iter()
         .collect();
@@ -209,6 +215,21 @@ impl HarnessFactory {
 
 pub(crate) fn known_harnesses() -> Vec<&'static str> {
     HARNESS_SPECS.iter().map(|spec| spec.name).collect()
+}
+
+/// Is this a meta-harness — one that calls back into `par` rather than driving a
+/// single agent CLI (`auto`, `fuse`, `solve`)?
+pub(crate) fn is_meta(name: &str) -> bool {
+    matches!(normalize_harness(name).as_str(), "auto" | "fuse" | "solve")
+}
+
+/// Absolute path to the running `par` binary, so a recursive invocation works
+/// regardless of the caller's PATH. Falls back to the bare name.
+pub(crate) fn self_bin() -> String {
+    env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .unwrap_or_else(|| "par".to_string())
 }
 
 pub(crate) fn spec_for_harness(name: &str) -> Option<&'static HarnessSpec> {

@@ -48,8 +48,10 @@ pub(crate) fn run_cli(options: FuseOptions) -> Result<(), String> {
         .max_context_chars
         .unwrap_or(session::DEFAULT_CONTEXT_CHARS);
 
-    // `--panel auto` asks the router to pick a diverse panel for this prompt.
-    let panel_codes = if options.panel.iter().any(|p| p == "auto") {
+    // `--panel auto` (the sole entry) asks the router to pick a diverse panel.
+    // `auto` listed alongside others (`--panel auto,solve`) is instead a
+    // metaharness panelist, handled by the harness factory like any other.
+    let panel_codes = if options.panel.len() == 1 && options.panel[0] == "auto" {
         route::pick_panel(&prompt, 3, route::resolve_bias(None), true)
     } else {
         options.panel.clone()

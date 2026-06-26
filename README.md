@@ -314,6 +314,21 @@ par default auto                                           # make auto-routing t
 
 The picker only considers agents whose CLI is actually installed, and never silently picks wrong: with no installable candidate it falls back to your default agent.
 
+### Meta-harnesses — agents made of agents
+
+`auto`, `fuse`, and `solve` are **meta-harnesses**: harnesses that call back into `par` instead of driving one agent CLI. Because every surface (panelists, conversation participants, `ask`, the run path) turns a harness into a command and spawns it, the meta-harnesses compose *everywhere a harness is accepted* — for free:
+
+```sh
+par -h auto -p "..."                  # route to the best agent
+par fuse --panel auto,auto,auto       # three independently-routed panelists
+par converse --a fuse --b claude      # a whole panel debates a single agent
+par fuse --panel claude,solve         # a panelist that self-escalates if it stalls
+par ask -h fuse -p "..."              # ask "the panel" as if it were one agent
+par fuse --judge solve "..."          # the judge itself routes + escalates
+```
+
+`auto` resolves the router and delegates to the chosen real agent in-process (no extra spawn); `fuse`/`solve` recurse into `par <sub>`. A depth counter in `PARLEY_META_DEPTH` (inherited across the recursive spawns) caps nesting so `--panel fuse,fuse,…` can't fork-bomb. Yes, it's turtles — but bounded turtles.
+
 ---
 
 ## Solve — auto-escalate a stuck agent to a panel

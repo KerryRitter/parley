@@ -415,7 +415,9 @@ Options:
   --harness, -h <name>    claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, kimi, antigravity
                           Shorthands: cl=claude co=codex cu=cursor g=gemini go=goose
                           oc=opencode q=qwen k=kimi a/ai=aider aq=amazon-q cp=copilot ag=antigravity
-                          auto = let Parley pick the best agent for the prompt (see `par route`)
+                          Meta-harnesses (call back into par, compose anywhere a harness is taken):
+                          auto = route to the best agent · fuse = run a panel · solve = route+escalate
+                          e.g. par fuse --panel auto,auto · par converse --a fuse --b claude
   --provider <name>       Provider namespace when the target CLI supports one
   --model, -m <name>      Model name to pass through
   --agent <name>          Agent/persona name for harnesses that support it
