@@ -20,6 +20,7 @@ use std::thread;
 use crate::ask::{self, AskRequest, ContextRef};
 use crate::cli::FuseOptions;
 use crate::harness::normalize_harness;
+use crate::route;
 use crate::session;
 
 /// Default panel when none is supplied: three different model families.
@@ -47,7 +48,13 @@ pub(crate) fn run_cli(options: FuseOptions) -> Result<(), String> {
         .max_context_chars
         .unwrap_or(session::DEFAULT_CONTEXT_CHARS);
 
-    let panel = resolve_panel(&options.panel)?;
+    // `--panel auto` asks the router to pick a diverse panel for this prompt.
+    let panel_codes = if options.panel.iter().any(|p| p == "auto") {
+        route::pick_panel(&prompt, 3, route::resolve_bias(None), true)
+    } else {
+        options.panel.clone()
+    };
+    let panel = resolve_panel(&panel_codes)?;
     let judge = normalize_harness(&options.judge.unwrap_or_else(|| DEFAULT_JUDGE.to_string()));
     let context = options.context_from.as_deref().map(parse_context_spec);
 

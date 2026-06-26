@@ -59,7 +59,9 @@ pub(crate) fn run_default_command(command: DefaultCommand) -> Result<(), String>
             let mut config = DefaultConfig::load()?;
             if let Some(harness) = harness {
                 let normalized = normalize_harness(&harness);
-                if spec_for_harness(&normalized).is_none() {
+                // `auto` is a valid default: it defers the choice to the
+                // per-prompt router at run time.
+                if normalized != "auto" && spec_for_harness(&normalized).is_none() {
                     return Err(format!("unknown harness \"{harness}\""));
                 }
                 config.selection.harness = Some(normalized);

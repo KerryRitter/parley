@@ -62,8 +62,11 @@ impl Symbols {
             .collect();
         let skills: BTreeSet<String> = config.skills.iter().map(|s| s.name.clone()).collect();
         let personas: BTreeSet<String> = config.personas.iter().map(|p| p.name.clone()).collect();
-        let references: BTreeSet<String> =
-            config.references.iter().map(|r| r.filename.clone()).collect();
+        let references: BTreeSet<String> = config
+            .references
+            .iter()
+            .map(|r| r.filename.clone())
+            .collect();
         Self {
             commands,
             command_ns,
@@ -130,7 +133,11 @@ fn scan_body(source: &str, body: &str, symbols: &Symbols) -> (usize, Vec<Unresol
 
     for raw in scan_path_refs(body, ".claude/agents/") {
         let stem = path_stem(&raw);
-        record(RefKind::Persona, raw.clone(), symbols.personas.contains(&stem));
+        record(
+            RefKind::Persona,
+            raw.clone(),
+            symbols.personas.contains(&stem),
+        );
     }
 
     for raw in scan_path_refs(body, ".claude/references/") {
@@ -186,7 +193,7 @@ fn scan_command_refs(body: &str) -> Vec<String> {
                 j += 1;
             }
             let token = &body[start..j];
-            let trimmed = token.trim_end_matches(|c: char| c == '.' || c == ',' || c == ')');
+            let trimmed = token.trim_end_matches(['.', ',', ')']);
             // Require at least one inner letter segment so bare "/" or "/*" is skipped.
             if trimmed.len() > 1 && trimmed[1..].chars().any(|c| c.is_ascii_alphabetic()) {
                 out.push(trimmed.to_string());
@@ -289,11 +296,19 @@ mod tests {
 
     fn symbols() -> Symbols {
         Symbols {
-            commands: ["autonomous/auto-pm", "autonomous/auto-dev", "dev", "git/commit"]
+            commands: [
+                "autonomous/auto-pm",
+                "autonomous/auto-dev",
+                "dev",
+                "git/commit",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            command_ns: ["autonomous", "git"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
-            command_ns: ["autonomous", "git"].iter().map(|s| s.to_string()).collect(),
             skills: ["checkpoint", "browser-smoke-test"]
                 .iter()
                 .map(|s| s.to_string())
@@ -318,7 +333,11 @@ mod tests {
 
     #[test]
     fn flags_typo_command_in_known_namespace() {
-        let (_, bad) = scan_body("auto-dev.md", "Run /autonomous/auto-pm-typo here.", &symbols());
+        let (_, bad) = scan_body(
+            "auto-dev.md",
+            "Run /autonomous/auto-pm-typo here.",
+            &symbols(),
+        );
         assert_eq!(bad.len(), 1);
         assert_eq!(bad[0].kind, RefKind::Command);
         assert_eq!(bad[0].raw, "/autonomous/auto-pm-typo");

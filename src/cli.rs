@@ -94,16 +94,100 @@ pub(crate) struct FuseOptions {
     pub dry_run: bool,
 }
 
-/// Options for `par mcp`. With no subcommand it runs the stdio server;
-/// `par mcp connect -h <harness>` registers this server into a harness.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// What a `par mcp ...` invocation should do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum McpMode {
+    /// Run the stdio MCP server (plain `par mcp`).
+    Serve,
+    /// Register `par mcp` into a harness (`par mcp connect -h <agent>`).
+    Connect,
+    /// Re-register after an `off` (`par mcp on -h <agent>`).
+    On,
+    /// Unregister `par mcp` from a harness (`par mcp off -h <agent>`).
+    Off,
+    /// Report whether `par mcp` is registered (`par mcp status -h <agent>`).
+    Status,
+}
+
+/// Options for `par mcp`. With no subcommand it runs the stdio server.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct McpOptions {
-    /// `Some(harness)` => register `par mcp` into that harness; `None` => serve.
-    pub connect: Option<String>,
+    pub mode: McpMode,
+    pub harness: Option<String>,
     pub dry_run: bool,
 }
 
+impl Default for McpOptions {
+    fn default() -> Self {
+        Self {
+            mode: McpMode::Serve,
+            harness: None,
+            dry_run: false,
+        }
+    }
+}
+
+/// Options for `par route` — explain which agent a prompt would route to.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RouteOptions {
+    pub prompt: String,
+    pub bias: Option<f64>,
+    /// How many agents to suggest for a `fuse` panel.
+    pub panel_size: usize,
+    pub json: bool,
+}
+
+/// Options for `par solve` — route to one agent, escalate to a panel on failure.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SolveOptions {
+    pub prompt: Option<String>,
+    /// Explicit first agent; `None`/`auto` => auto-route.
+    pub harness: Option<String>,
+    /// Explicit escalation panel; empty => auto-select a diverse one.
+    pub panel: Vec<String>,
+    pub judge: Option<String>,
+    pub judge_model: Option<String>,
+    pub bias: Option<f64>,
+    /// Detect-only: report what would escalate, take no action.
+    pub shadow: bool,
+    /// Force the "no file change = no progress" check on/off; default = on for
+    /// code-shaped tasks.
+    pub expect_changes: Option<bool>,
+    pub cwd: Option<String>,
+    pub yolo: bool,
+    pub dry_run: bool,
+}
+
+/// Options for `par stats` — print the telemetry scoreboard.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StatsOptions {
+    pub json: bool,
+}
+
+/// Options for `par rate` — attach feedback to the most recent run.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RateOptions {
+    /// true = 👍, false = 👎.
+    pub sign: bool,
+    pub note: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CommandsCommand {
+    Install,
+    List,
+}
+
+/// Options for `par commands` — generate slash commands into an agent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CommandsOptions {
+    pub command: CommandsCommand,
+    pub agent: Option<String>,
+    pub dir: Option<String>,
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CliAction {
     Help,
     Version,
@@ -116,6 +200,12 @@ pub(crate) enum CliAction {
     Ask(AskOptions),
     Converse(ConverseOptions),
     Fuse(FuseOptions),
+    Solve(Box<SolveOptions>),
+    Route(RouteOptions),
+    Stats(StatsOptions),
+    Rate(RateOptions),
+    Statusline,
+    Commands(CommandsOptions),
     Mcp(McpOptions),
     Run(Box<CliOptions>),
 }
@@ -183,6 +273,29 @@ where
         Some("fuse" | "panel") => {
             args.next();
             return parse_fuse_args(args);
+        }
+        Some("solve") => {
+            args.next();
+            return parse_solve_args(args);
+        }
+        Some("route") => {
+            args.next();
+            return parse_route_args(args);
+        }
+        Some("stats" | "gain") => {
+            args.next();
+            return parse_stats_args(args);
+        }
+        Some("rate") => {
+            args.next();
+            return parse_rate_args(args);
+        }
+        Some("statusline") => {
+            return Ok(CliAction::Statusline);
+        }
+        Some("commands") => {
+            args.next();
+            return parse_commands_args(args);
         }
         Some("mcp") => {
             args.next();
@@ -302,6 +415,7 @@ Options:
   --harness, -h <name>    claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, kimi, antigravity
                           Shorthands: cl=claude co=codex cu=cursor g=gemini go=goose
                           oc=opencode q=qwen k=kimi a/ai=aider aq=amazon-q cp=copilot ag=antigravity
+                          auto = let Parley pick the best agent for the prompt (see `par route`)
   --provider <name>       Provider namespace when the target CLI supports one
   --model, -m <name>      Model name to pass through
   --agent <name>          Agent/persona name for harnesses that support it
@@ -391,6 +505,30 @@ Fuse (panel + judge — make answers smarter):
   par fuse \"...\" --context-from cl
                                   Seed every panelist with your latest claude session here
   --max-context, --cwd, --no-yolo, --dry-run as in ask   (alias: par panel)
+  par fuse --panel auto -p \"...\"   Let the router pick a diverse panel for the prompt
+
+Route (which agent should answer this?):
+  par route \"<task>\"              Show the best agent for a prompt, why, and a suggested panel
+  par route \"...\" --bias 1.0      0 = cheapest/fastest, 1 = strongest (default 0.7)
+  par route \"...\" --json          Machine-readable decision + candidate scores
+  par -h auto -p \"<task>\"         Route, then run the chosen agent (also: PARLEY_HARNESS=auto)
+
+Solve (route, then auto-escalate to a panel if the agent gets stuck):
+  par solve \"<task>\"             Run the routed agent; on a stuck/failed/empty reply, convene a panel
+  par solve \"...\" -h co          Force the first agent; escalate to others on failure
+  par solve \"...\" --panel cl,g   Force the escalation panel;  --judge <agent>
+  par solve \"...\" --shadow       Detect-only: report what would escalate, take no action
+  --bias, --no-yolo, --cwd, --dry-run as elsewhere
+
+Stats & feedback (local, learns better routing over time):
+  par stats                       Per-(task, agent) scoreboard from local telemetry  (alias: par gain)
+  par stats --json                Machine-readable scoreboard
+  par rate + [note]               Thumbs-up the last run;  par rate - [note] for thumbs-down
+
+Slash commands & statusline (for the agents par drives):
+  par commands install -h cl      Write /fuse, /solve, /route slash commands into .claude/commands
+  par commands install -h co      ...or into .codex/prompts   (--dir <path>, --dry-run)
+  par statusline                  Status-line badge for Claude Code (reads its stdin JSON)
 
 MCP:
   par mcp                         Run the stdio MCP server (JSON-RPC over stdin/stdout)
@@ -399,11 +537,16 @@ MCP:
   par mcp connect -h cl           Register this server into a harness (runs its native mcp add)
   par mcp connect -h oc           opencode/others may open their own add TUI
   par mcp connect -h cu           cursor has no add command; merges ~/.cursor/mcp.json
+  par mcp status -h cl            Report whether par is registered (on/off)
+  par mcp off -h cl               Unregister par;  par mcp on -h cl re-registers
   par mcp connect -h cl --dry-run Show what would run / be written, change nothing
                                   Supported: claude, codex, gemini, opencode, cursor
 
 Environment defaults:
   PARLEY_HARNESS, PARLEY_PROVIDER, PARLEY_MODEL, PARLEY_YOLO
+  PARLEY_QUALITY_BIAS   routing dial 0..1 (default 0.7)
+  PARLEY_TIMEOUT, PARLEY_IDLE_TIMEOUT   captured-run watchdog seconds (0 = off)
+  PARLEY_TELEMETRY=off  disable local telemetry; PARLEY_TELEMETRY_PROMPTS=1 store raw prompts
   (legacy AGENT_ROUTER_* names still work)
 "
 }
@@ -848,9 +991,24 @@ where
     I: Iterator<Item = String>,
 {
     let mut args = args;
-    if args.peek().map(String::as_str) == Some("connect") {
-        args.next();
-        return parse_mcp_connect_args(args);
+    match args.peek().map(String::as_str) {
+        Some("connect") => {
+            args.next();
+            return parse_mcp_sub(args, McpMode::Connect);
+        }
+        Some("on") => {
+            args.next();
+            return parse_mcp_sub(args, McpMode::On);
+        }
+        Some("off") => {
+            args.next();
+            return parse_mcp_sub(args, McpMode::Off);
+        }
+        Some("status") => {
+            args.next();
+            return parse_mcp_sub(args, McpMode::Status);
+        }
+        _ => {}
     }
 
     // Plain `par mcp` — run the server.
@@ -864,7 +1022,7 @@ where
     Ok(CliAction::Mcp(McpOptions::default()))
 }
 
-fn parse_mcp_connect_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+fn parse_mcp_sub<I>(args: std::iter::Peekable<I>, mode: McpMode) -> Result<CliAction, String>
 where
     I: Iterator<Item = String>,
 {
@@ -884,20 +1042,202 @@ where
             _ if arg.starts_with("--harness=") => {
                 harness = Some(value_after_equals(&arg, "--harness="))
             }
-            _ if arg.starts_with('-') => return Err(format!("unknown mcp connect option: {arg}")),
+            _ if arg.starts_with('-') => return Err(format!("unknown mcp option: {arg}")),
             // Bare harness name, e.g. `par mcp connect claude`.
             _ if harness.is_none() => harness = Some(arg),
             _ => return Err(format!("unexpected argument: {arg}")),
         }
     }
 
-    let harness = harness.ok_or(
-        "mcp connect requires a harness: par mcp connect -h <claude|codex|gemini|opencode|cursor>",
-    )?;
     Ok(CliAction::Mcp(McpOptions {
-        connect: Some(harness),
+        mode,
+        harness,
         dry_run,
     }))
+}
+
+fn parse_solve_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let mut o = SolveOptions {
+        yolo: true,
+        ..SolveOptions::default()
+    };
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" => return Ok(CliAction::Help),
+            "-h" => match args.peek() {
+                Some(next) if !next.starts_with('-') => o.harness = args.next(),
+                _ => return Ok(CliAction::Help),
+            },
+            "--harness" => o.harness = Some(require_value(&mut args, "--harness")?),
+            "-p" | "--prompt" => o.prompt = Some(require_value(&mut args, "--prompt")?),
+            "--panel" => o.panel = parse_panel(&require_value(&mut args, "--panel")?),
+            "--judge" => o.judge = Some(require_value(&mut args, "--judge")?),
+            "--judge-model" => o.judge_model = Some(require_value(&mut args, "--judge-model")?),
+            "--bias" => o.bias = Some(parse_bias(&require_value(&mut args, "--bias")?)?),
+            "--shadow" => o.shadow = true,
+            "--expect-changes" => o.expect_changes = Some(true),
+            "--no-expect-changes" => o.expect_changes = Some(false),
+            "--cwd" => o.cwd = Some(require_value(&mut args, "--cwd")?),
+            "--yolo" => o.yolo = true,
+            "--no-yolo" => o.yolo = false,
+            "--dry-run" => o.dry_run = true,
+            _ if arg.starts_with("--harness=") => {
+                o.harness = Some(value_after_equals(&arg, "--harness="))
+            }
+            _ if arg.starts_with("--panel=") => {
+                o.panel = parse_panel(&value_after_equals(&arg, "--panel="))
+            }
+            _ if arg.starts_with("--cwd=") => o.cwd = Some(value_after_equals(&arg, "--cwd=")),
+            _ if arg.starts_with('-') => return Err(format!("unknown solve option: {arg}")),
+            _ => {
+                o.prompt = Some(match o.prompt {
+                    Some(existing) => format!("{existing} {arg}"),
+                    None => arg,
+                });
+            }
+        }
+    }
+
+    if o.prompt.is_none() {
+        return Err("solve requires a prompt: par solve \"<task>\"".to_string());
+    }
+    Ok(CliAction::Solve(Box::new(o)))
+}
+
+fn parse_route_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let mut o = RouteOptions {
+        panel_size: 3,
+        ..RouteOptions::default()
+    };
+    let mut prompt: Option<String> = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => return Ok(CliAction::Help),
+            "-p" | "--prompt" => prompt = Some(require_value(&mut args, "--prompt")?),
+            "--bias" => o.bias = Some(parse_bias(&require_value(&mut args, "--bias")?)?),
+            "--panel" => {
+                let raw = require_value(&mut args, "--panel")?;
+                o.panel_size = raw
+                    .parse()
+                    .map_err(|_| format!("--panel must be a number, got {raw}"))?;
+            }
+            "--json" => o.json = true,
+            _ if arg.starts_with('-') => return Err(format!("unknown route option: {arg}")),
+            _ => {
+                prompt = Some(match prompt {
+                    Some(existing) => format!("{existing} {arg}"),
+                    None => arg,
+                });
+            }
+        }
+    }
+
+    o.prompt = prompt.ok_or("route requires a prompt: par route \"<task>\"")?;
+    Ok(CliAction::Route(o))
+}
+
+fn parse_stats_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut o = StatsOptions::default();
+    for arg in args {
+        match arg.as_str() {
+            "--help" | "-h" => return Ok(CliAction::Help),
+            "--json" => o.json = true,
+            _ => return Err(format!("unknown stats option: {arg}")),
+        }
+    }
+    Ok(CliAction::Stats(o))
+}
+
+fn parse_rate_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let first = args
+        .next()
+        .ok_or("rate needs a sign: par rate + [note]  /  par rate - [note]")?;
+    if first == "--help" {
+        return Ok(CliAction::Help);
+    }
+    let sign = match first.to_ascii_lowercase().as_str() {
+        "+" | "up" | "good" | "yes" | "y" => true,
+        "-" | "down" | "bad" | "no" | "n" => false,
+        other => return Err(format!("rate sign must be + or -, got {other}")),
+    };
+    let note: Vec<String> = args.collect();
+    let note = if note.is_empty() {
+        None
+    } else {
+        Some(note.join(" "))
+    };
+    Ok(CliAction::Rate(RateOptions { sign, note }))
+}
+
+fn parse_commands_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
+where
+    I: Iterator<Item = String>,
+{
+    let mut args = args;
+    let command = match args.peek().map(String::as_str) {
+        Some("install") => {
+            args.next();
+            CommandsCommand::Install
+        }
+        Some("list" | "ls") => {
+            args.next();
+            CommandsCommand::List
+        }
+        Some("--help") => return Ok(CliAction::Help),
+        None => CommandsCommand::List,
+        _ => CommandsCommand::Install,
+    };
+    let mut agent = None;
+    let mut dir = None;
+    let mut dry_run = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" => return Ok(CliAction::Help),
+            "-h" => match args.peek() {
+                Some(next) if !next.starts_with('-') => agent = args.next(),
+                _ => return Ok(CliAction::Help),
+            },
+            "--harness" | "--agent" => agent = Some(require_value(&mut args, "--agent")?),
+            "--dir" => dir = Some(require_value(&mut args, "--dir")?),
+            "--dry-run" => dry_run = true,
+            _ if arg.starts_with("--agent=") => agent = Some(value_after_equals(&arg, "--agent=")),
+            _ if arg.starts_with("--dir=") => dir = Some(value_after_equals(&arg, "--dir=")),
+            _ if arg.starts_with('-') => return Err(format!("unknown commands option: {arg}")),
+            _ if agent.is_none() => agent = Some(arg),
+            _ => return Err(format!("unexpected argument: {arg}")),
+        }
+    }
+
+    Ok(CliAction::Commands(CommandsOptions {
+        command,
+        agent,
+        dir,
+        dry_run,
+    }))
+}
+
+/// Parse a quality/price bias value in [0, 1].
+fn parse_bias(raw: &str) -> Result<f64, String> {
+    raw.parse::<f64>()
+        .map_err(|_| format!("--bias must be a number in [0,1], got {raw}"))
 }
 
 fn require_value<I>(args: &mut std::iter::Peekable<I>, flag: &str) -> Result<String, String>

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use crate::cli::{AskOptions, CliOptions};
 use crate::harness::{HarnessFactory, Invocation, Request};
-use crate::process::{capture_invocation, Captured};
+use crate::process::{capture_invocation_timeout, Captured, Timeouts};
 use crate::session;
 
 /// A reference to a prior session to inject as context: which agent, and which
@@ -69,10 +69,12 @@ pub(crate) fn build(req: &AskRequest) -> Result<Invocation, String> {
     harness.build(&request)
 }
 
-/// Build and run the call, returning the target agent's captured output.
+/// Build and run the call, returning the target agent's captured output. A
+/// watchdog (configurable via `PARLEY_TIMEOUT` / `PARLEY_IDLE_TIMEOUT`) kills a
+/// hung agent so a single stuck panelist can't wedge a whole `fuse`.
 pub(crate) fn run(req: &AskRequest) -> Result<Captured, String> {
     let invocation = build(req)?;
-    capture_invocation(invocation, req.cwd.to_str())
+    capture_invocation_timeout(invocation, req.cwd.to_str(), Timeouts::from_env())
 }
 
 /// `par ask` entry point: resolve options, then run (or print under dry-run).

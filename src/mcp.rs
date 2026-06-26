@@ -18,14 +18,44 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use crate::ask::{self, AskRequest, ContextRef};
-use crate::cli::McpOptions;
+use crate::cli::{McpMode, McpOptions};
+use crate::fsx;
 use crate::fuse;
 use crate::harness::{normalize_harness, Invocation};
 use crate::json::Json;
-use crate::process::run_invocation;
+use crate::process::{capture_invocation, run_invocation};
 use crate::session;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Route a `par mcp ...` invocation to the right handler.
+pub(crate) fn dispatch(options: McpOptions) -> Result<(), String> {
+    match options.mode {
+        McpMode::Serve => run(options),
+        // `on` is just (re)registration.
+        McpMode::Connect | McpMode::On => {
+            let harness = options
+                .harness
+                .as_deref()
+                .ok_or("mcp connect requires a harness: par mcp connect -h <agent>")?;
+            connect(harness, options.dry_run)
+        }
+        McpMode::Off => {
+            let harness = options
+                .harness
+                .as_deref()
+                .ok_or("mcp off requires a harness: par mcp off -h <agent>")?;
+            off(harness, options.dry_run)
+        }
+        McpMode::Status => {
+            let harness = options
+                .harness
+                .as_deref()
+                .ok_or("mcp status requires a harness: par mcp status -h <agent>")?;
+            status(harness)
+        }
+    }
+}
 
 pub(crate) fn run(_options: McpOptions) -> Result<(), String> {
     let cwd = env::current_dir().map_err(|e| format!("failed to get cwd: {e}"))?;
@@ -135,6 +165,124 @@ fn connect_cursor(bin: &str, dry_run: bool) -> Result<(), String> {
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     println!("Registered par MCP server in {}", path.display());
     println!("  command: {bin} mcp");
+    Ok(())
+}
+
+/// Report whether `par` is registered as an MCP server in a harness. Native
+/// `mcp list` is queried for the harnesses that have one; cursor is read from
+/// its `mcp.json`.
+fn status(harness: &str) -> Result<(), String> {
+    let normalized = normalize_harness(harness);
+    let registered = match normalized.as_str() {
+        "claude" | "codex" | "gemini" => {
+            let out =
+                capture_invocation(Invocation::new(&normalized, argv(&["mcp", "list"])), None)?;
+            if !out.success && out.stdout.trim().is_empty() {
+                return Err(format!(
+                    "could not query {normalized} mcp list: {}",
+                    out.stderr.trim()
+                ));
+            }
+            out.stdout.contains("par")
+        }
+        "cursor" => cursor_has_par()?,
+        other => {
+            return Err(format!(
+                "mcp status supports claude, codex, gemini, cursor (got \"{other}\")"
+            ))
+        }
+    };
+    println!(
+        "par MCP in {normalized}: {}",
+        if registered {
+            "registered (on)"
+        } else {
+            "not registered (off)"
+        }
+    );
+    Ok(())
+}
+
+/// Unregister `par`'s MCP server from a harness. Native `mcp remove` for the
+/// harnesses that have one; for cursor the entry is removed from `mcp.json` and
+/// parked to a sidecar so `par mcp on` can restore any custom fields.
+fn off(harness: &str, dry_run: bool) -> Result<(), String> {
+    let normalized = normalize_harness(harness);
+    match normalized.as_str() {
+        "claude" => exec_or_print(
+            Invocation::new("claude", argv(&["mcp", "remove", "-s", "user", "par"])),
+            dry_run,
+        ),
+        "codex" => exec_or_print(
+            Invocation::new("codex", argv(&["mcp", "remove", "par"])),
+            dry_run,
+        ),
+        "gemini" => exec_or_print(
+            Invocation::new("gemini", argv(&["mcp", "remove", "par"])),
+            dry_run,
+        ),
+        "cursor" => off_cursor(dry_run),
+        other => Err(format!(
+            "mcp off supports claude, codex, gemini, cursor (got \"{other}\")"
+        )),
+    }
+}
+
+fn cursor_mcp_path() -> Result<PathBuf, String> {
+    let home = session::home_dir().ok_or("cannot resolve HOME")?;
+    Ok(home.join(".cursor").join("mcp.json"))
+}
+
+fn cursor_has_par() -> Result<bool, String> {
+    let path = cursor_mcp_path()?;
+    let Some(Json::Object(root)) = fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| Json::parse(&raw).ok())
+    else {
+        return Ok(false);
+    };
+    Ok(matches!(root.get("mcpServers"), Some(Json::Object(servers)) if servers.contains_key("par")))
+}
+
+/// Remove `par` from `~/.cursor/mcp.json`, preserving the other servers, and
+/// park the removed entry so it can be restored byte-for-byte by `mcp on`.
+fn off_cursor(dry_run: bool) -> Result<(), String> {
+    let path = cursor_mcp_path()?;
+    let mut root = match fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| Json::parse(&raw).ok())
+    {
+        Some(Json::Object(map)) => map,
+        _ => {
+            println!("par not registered in {} (nothing to do)", path.display());
+            return Ok(());
+        }
+    };
+    let mut servers = match root.get("mcpServers") {
+        Some(Json::Object(map)) => map.clone(),
+        _ => BTreeMap::new(),
+    };
+    let Some(parked) = servers.remove("par") else {
+        println!("par not registered in {} (nothing to do)", path.display());
+        return Ok(());
+    };
+    root.insert("mcpServers".to_string(), Json::Object(servers));
+    let merged = Json::Object(root);
+    let parked_path = path.with_extension("json.par-parked");
+
+    if dry_run {
+        println!("# would remove the `par` server from {}", path.display());
+        println!("# would park it to {}", parked_path.display());
+        return Ok(());
+    }
+    fsx::write(&path, &merged.to_pretty_string())?;
+    fsx::write(&parked_path, &parked.to_pretty_string())?;
+    println!(
+        "Removed par from {} (parked to {})",
+        path.display(),
+        parked_path.display()
+    );
+    println!("Restore with: par mcp on -h cursor");
     Ok(())
 }
 
