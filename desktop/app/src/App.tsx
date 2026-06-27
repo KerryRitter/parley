@@ -2,10 +2,11 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Collapsible, CommandPalette, Input, Kbd, Popover, ScrollArea, Spinner, Switch } from "./cruz";
 import {
-  invoke, listDir, listFiles, listSlashCommands, onChatEvent, pickFolder, savePaste,
+  invoke, listDir, listFiles, listSlashCommands, gitHeadFile, readFile, onChatEvent, pickFolder, savePaste,
   type AgentInfo, type AgentList, type AgentUsage, type ChatEvent, type DirListing, type GitDiff, type Panelist, type SendReq,
 } from "./bridge";
 import { DEFAULT_PANEL, NEEDS_PROVIDER, PRESETS, color, display } from "./agents";
+import { monaco, langForPath } from "./monaco";
 
 interface Pane { agent: string; text: string; warm: boolean; cmd?: string; done: boolean; code?: number; ms?: number; }
 interface Msg {
@@ -314,7 +315,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
             slashCmds={slashCmds} fileSearch={(q) => listFiles(cwd || null, q)} history={history} histIdx={histIdx} inputRef={inputRef} />
         </main>
 
-        {cockpit && <Cockpit diff={diff} onRefresh={refreshDiff} onClose={() => setCockpit(false)} />}
+        {cockpit && <Cockpit diff={diff} cwd={cwd} onRefresh={refreshDiff} onClose={() => setCockpit(false)} />}
       </div>
 
       {/* status bar */}
@@ -566,14 +567,74 @@ function Empty({ primary, fuse }: { primary: string; fuse: boolean }) {
   );
 }
 
-function Cockpit({ diff, onRefresh, onClose }: { diff: GitDiff | null; onRefresh: () => void; onClose: () => void }) {
+function parsePorcelain(line: string): { status: string; path: string } {
+  const m = line.match(/^(..)\s+(.*)$/);
+  return m ? { status: m[1].trim() || "M", path: m[2] } : { status: "?", path: line.trim() };
+}
+function statusColor(s: string) {
+  if (s.includes("?")) return "var(--color-success)";
+  if (s.includes("M")) return "var(--color-warning)";
+  if (s.includes("A")) return "var(--color-success)";
+  if (s.includes("D")) return "var(--color-danger)";
+  return "var(--color-text-muted)";
+}
+
+function DiffView({ cwd, path }: { cwd: string; path: string }) {
+  const elRef = useRef<HTMLDivElement>(null);
+  const edRef = useRef<ReturnType<typeof monaco.editor.createDiffEditor> | null>(null);
+  useEffect(() => {
+    if (!elRef.current) return;
+    const ed = monaco.editor.createDiffEditor(elRef.current, {
+      readOnly: true, theme: "parley-dark", automaticLayout: true, renderSideBySide: false,
+      fontSize: 12, fontFamily: "JetBrains Mono, ui-monospace, monospace", minimap: { enabled: false },
+      scrollBeyondLastLine: false, lineNumbersMinChars: 3, renderOverviewRuler: false,
+    });
+    edRef.current = ed;
+    return () => { const m = ed.getModel(); ed.dispose(); m?.original?.dispose(); m?.modified?.dispose(); };
+  }, []);
+  useEffect(() => {
+    let live = true;
+    Promise.all([gitHeadFile(cwd || null, path).catch(() => ""), readFile(cwd || null, path).catch(() => "")]).then(([head, cur]) => {
+      if (!live || !edRef.current) return;
+      const lang = langForPath(path);
+      const old = edRef.current.getModel();
+      edRef.current.setModel({ original: monaco.editor.createModel(head, lang), modified: monaco.editor.createModel(cur, lang) });
+      old?.original?.dispose();
+      old?.modified?.dispose();
+    });
+    return () => { live = false; };
+  }, [cwd, path]);
+  return <div ref={elRef} style={{ height: "100%", width: "100%" }} />;
+}
+
+function Cockpit({ diff, cwd, onRefresh, onClose }: { diff: GitDiff | null; cwd: string; onRefresh: () => void; onClose: () => void }) {
+  const files = useMemo(() => (diff?.files || []).map(parsePorcelain), [diff]);
+  const [selected, setSelected] = useState<string | null>(null);
+  useEffect(() => {
+    if (files.length && (!selected || !files.find((f) => f.path === selected))) setSelected(files[0].path);
+    if (!files.length) setSelected(null);
+  }, [files, selected]);
+
   return (
-    <aside className="flex flex-col border-l border-surface-border" style={{ width: 400, flexShrink: 0, background: "var(--color-surface)" }}>
-      <div className="flex items-center justify-between px-3 h-9 border-b border-surface-border text-[11px] font-mono uppercase tracking-wider text-text-muted"><span>working tree {diff?.isRepo ? `· ⎇ ${diff.branch}` : ""}</span><div className="flex gap-1.5"><button className="cz-mini" onClick={onRefresh}>refresh</button><button className="cz-mini" onClick={onClose}>close</button></div></div>
-      <div className="px-3 py-2 border-b border-surface-border font-mono text-[11.5px]" style={{ maxHeight: 150, overflowY: "auto" }}>
-        {!diff || !diff.isRepo ? <span className="italic text-text-tertiary">not a git repo</span> : diff.files.length === 0 ? <span className="italic text-text-tertiary">working tree clean</span> : diff.files.map((f, i) => <div key={i} className="whitespace-pre" style={{ color: "#d3d7df" }}>{f}</div>)}
+    <aside className="flex flex-col border-l border-surface-border" style={{ width: 520, flexShrink: 0, background: "var(--color-surface)" }}>
+      <div className="flex items-center justify-between px-3 h-9 border-b border-surface-border text-[11px] font-mono uppercase tracking-wider text-text-muted">
+        <span>changes {diff?.isRepo ? `· ⎇ ${diff.branch}` : ""}</span>
+        <div className="flex gap-1.5"><button className="cz-mini" onClick={onRefresh}>refresh</button><button className="cz-mini" onClick={onClose}>close ⌘J</button></div>
       </div>
-      <ScrollArea><pre className="m-0 px-3 py-2.5 font-mono whitespace-pre" style={{ fontSize: 11.5, lineHeight: 1.5, color: "#aeb6c4" }}>{diff?.diff || ""}</pre></ScrollArea>
+      <div className="border-b border-surface-border" style={{ maxHeight: 150, overflowY: "auto" }}>
+        {!diff || !diff.isRepo ? <div className="px-3 py-2 italic text-text-tertiary font-mono text-[11.5px]">not a git repo</div>
+          : files.length === 0 ? <div className="px-3 py-2 italic text-text-tertiary font-mono text-[11.5px]">working tree clean</div>
+          : files.map((f) => (
+            <button key={f.path} className={"cz-diff-file" + (selected === f.path ? " cz-diff-file-sel" : "")} onClick={() => setSelected(f.path)}>
+              <span className="font-bold" style={{ color: statusColor(f.status), width: 16, display: "inline-block" }}>{f.status}</span>
+              <span className="truncate">{f.path}</span>
+            </button>
+          ))}
+      </div>
+      <div className="flex-1 min-h-0">
+        {selected ? <DiffView cwd={cwd} path={selected} />
+          : <div className="grid place-items-center h-full text-text-tertiary font-mono text-[12px]">select a changed file</div>}
+      </div>
     </aside>
   );
 }

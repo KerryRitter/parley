@@ -57,6 +57,12 @@ export function listSlashCommands(cwd: string | null, harness: string): Promise<
 export function listFiles(cwd: string | null, query: string): Promise<string[]> {
   return invoke<string[]>("list_files", { cwd, query });
 }
+export function readFile(cwd: string | null, path: string): Promise<string> {
+  return invoke<string>("read_file", { cwd, path });
+}
+export function gitHeadFile(cwd: string | null, path: string): Promise<string> {
+  return invoke<string>("git_head_file", { cwd, path });
+}
 export interface GitDiff {
   isRepo: boolean;
   branch: string;
@@ -235,6 +241,10 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       const files = ["src/main.rs", "src/App.tsx", "src/bridge.ts", "README.md", "Cargo.toml", "src/components/Chat.tsx", "docs/design.md"];
       return files.filter((f) => f.toLowerCase().includes(q)).slice(0, 60);
     }
+    case "read_file":
+      return `// ${(args as { path?: string })?.path}\nfn main() {\n    let limiter = TokenBucket::per_tenant();\n    println!("hello from the working tree");\n    limiter.refill_lazily();\n}\n`;
+    case "git_head_file":
+      return `// ${(args as { path?: string })?.path}\nfn main() {\n    println!("hello");\n}\n`;
     case "list_dir": {
       const path = (args as { path?: string | null })?.path || "/home/dev";
       const kids = path === "/home/dev"

@@ -1060,6 +1060,35 @@ fn walk_files(
     }
 }
 
+/// Read a file's current contents (for the in-app editor). Bounded.
+#[tauri::command]
+fn read_file(cwd: Option<String>, path: String) -> Result<String, String> {
+    let p = resolve_cwd(&cwd).join(&path);
+    let meta = std::fs::metadata(&p).map_err(|e| format!("stat {}: {e}", p.display()))?;
+    if meta.len() > 600_000 {
+        return Err("file too large to view".into());
+    }
+    std::fs::read_to_string(&p).map_err(|e| format!("read {}: {e}", p.display()))
+}
+
+/// The committed (HEAD) version of a file, for the diff editor. Empty string
+/// when the file is new/untracked.
+#[tauri::command]
+async fn git_head_file(cwd: Option<String>, path: String) -> Result<String, String> {
+    let dir = resolve_cwd(&cwd);
+    let out = Command::new("git")
+        .args(["show", &format!("HEAD:{path}")])
+        .current_dir(&dir)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(if out.status.success() {
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    } else {
+        String::new()
+    })
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DirEntry {
@@ -1221,7 +1250,9 @@ fn main() {
             save_paste,
             list_dir,
             list_slash_commands,
-            list_files
+            list_files,
+            read_file,
+            git_head_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running Parley desktop");
