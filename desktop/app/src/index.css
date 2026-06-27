@@ -191,9 +191,10 @@ body {
 }
 .cz-run-fused { font-size: 14px; }
 .cz-run-cmd {
+  display: flex; align-items: center; gap: 8px;
   padding: 6px 11px; border-top: 1px solid var(--color-surface-border); font-family: var(--font-mono);
   font-size: 11px; color: var(--color-text-tertiary); background: rgba(0, 0, 0, 0.18);
-  white-space: pre-wrap; word-break: break-all;
+  word-break: break-all;
 }
 
 .cz-pre {
@@ -272,3 +273,8 @@ body {
 /* slash/file menu caption */
 .cz-slash-cap { padding: 4px 9px 5px; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-tertiary); border-bottom: 1px solid var(--color-surface-border); margin-bottom: 3px; }
 .cz-slash-item { font-family: var(--font-mono); }
+
+/* copy buttons (reveal on run-block hover) */
+.cz-copy { opacity: 0; background: var(--color-surface-lighter); border: 1px solid var(--color-surface-border); color: var(--color-text-muted); border-radius: 5px; padding: 1px 8px; font-family: var(--font-mono); font-size: 10.5px; cursor: pointer; transition: opacity .12s, color .12s; flex-shrink: 0; }
+.cz-run-hover:hover .cz-copy { opacity: 1; }
+.cz-copy:hover { color: var(--color-text); border-color: var(--color-primary); }

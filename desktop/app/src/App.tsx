@@ -37,6 +37,14 @@ function plLabel(agent: string, model?: string | null) { return model && model.t
 function Dot({ agent, size = 8, warm = false }: { agent: string; size?: number; warm?: boolean }) {
   return <span className={warm ? "cz-dot-warm" : ""} style={{ width: size, height: size, borderRadius: 999, background: color(agent), boxShadow: `0 0 8px -1px ${color(agent)}`, display: "inline-block", flexShrink: 0 }} />;
 }
+function CopyBtn({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button className="cz-copy" title="Copy" onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(text); setDone(true); setTimeout(() => setDone(false), 1100); }}>
+      {done ? "✓ copied" : "copy"}
+    </button>
+  );
+}
 
 // ---- tab shell: many consoles at once --------------------------------------
 
@@ -63,6 +71,19 @@ export function App() {
       return rest;
     });
   };
+  const setTitle = (id: string, title: string) => setTabs((t) => t.map((x) => (x.id === id ? { ...x, title } : x)));
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "t") { e.preventDefault(); addTab(); }
+      else if (k === "w") { e.preventDefault(); closeTab(active); }
+      else if (k >= "1" && k <= "9") { const i = +k - 1; if (tabs[i]) { e.preventDefault(); setActive(tabs[i].id); } }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   return (
     <div className="flex flex-col h-screen">
@@ -80,7 +101,7 @@ export function App() {
       <div className="flex-1 min-h-0 relative">
         {tabs.map((t) => (
           <div key={t.id} style={{ display: t.id === active ? "block" : "none", height: "100%" }}>
-            <Console chatId={t.id} onBusy={(b) => setBusyMap((m) => ({ ...m, [t.id]: b }))} />
+            <Console chatId={t.id} active={t.id === active} onBusy={(b) => setBusyMap((m) => ({ ...m, [t.id]: b }))} onTitle={(title) => setTitle(t.id, title)} />
           </div>
         ))}
       </div>
@@ -88,7 +109,7 @@ export function App() {
   );
 }
 
-function Console({ chatId, onBusy }: { chatId: string; onBusy: (busy: boolean) => void }) {
+function Console({ chatId, active, onBusy, onTitle }: { chatId: string; active: boolean; onBusy: (busy: boolean) => void; onTitle: (t: string) => void }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [primary, setPrimary] = useState("claude");
   const [fuse, setFuse] = useState(false);
@@ -159,6 +180,26 @@ function Console({ chatId, onBusy }: { chatId: string; onBusy: (busy: boolean) =
     const h = primary === "auto" ? "claude" : primary;
     listSlashCommands(cwd || null, h).then(setSlashCmds).catch(() => setSlashCmds([]));
   }, [primary, cwd]);
+
+  // tab title from the working dir basename
+  useEffect(() => {
+    const base = cwd ? cwd.replace(/\/+$/, "").split("/").pop() : "";
+    onTitle(base || "console");
+  }, [cwd, onTitle]);
+
+  // console-level keyboard (only the active console responds)
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "l") { e.preventDefault(); inputRef.current?.focus(); }
+      else if (k === "b") { e.preventDefault(); setRailOpen((v) => !v); }
+      else if (k === "j") { e.preventDefault(); setCockpit((v) => { if (!v) refreshDiff(); return !v; }); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, refreshDiff]);
 
   // panel ops
   const addPanelist = (agent: string) => setPanel((p) => [...p, { id: "p" + ++pid.current, agent, model: "", provider: "" }]);
@@ -489,16 +530,17 @@ function RunGroup({ m }: { m: Msg }) {
 function RunBlock({ p, title, fused = false, auto = false }: { p: Pane; title: string; fused?: boolean; auto?: boolean }) {
   const accent = fused ? "var(--color-primary)" : color(p.agent);
   return (
-    <div className="cz-run-block" style={{ borderLeftColor: accent, ...(fused ? { background: "linear-gradient(180deg, rgba(240,163,94,.06), transparent 60%)" } : {}) }}>
+    <div className="cz-run-block cz-run-hover" style={{ borderLeftColor: accent, ...(fused ? { background: "linear-gradient(180deg, rgba(240,163,94,.06), transparent 60%)" } : {}) }}>
       <div className="cz-run-head">
         <Dot agent={fused ? "fused" : p.agent} size={8} warm={p.warm} />
         <span className="font-semibold" style={{ color: "var(--color-text)" }}>{auto ? `auto → ${display(p.agent)}` : title}</span>
         {p.warm ? <span className="cz-warm-tag">warm · resumed</span> : (!fused && <span className="cz-cold-tag">new session</span>)}
         <div className="flex-1" />
+        {p.text && <CopyBtn text={p.text} />}
         {p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span><span style={{ color: p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === 0 ? "✓ exit 0" : `✕ exit ${p.code ?? 1}`}</span></> : <Spinner size="xs" />}
       </div>
       <div className={"cz-run-body" + (fused ? " cz-run-fused" : "")} dangerouslySetInnerHTML={renderText(p.text || (p.done ? "" : "…"))} />
-      {p.cmd && <div className="cz-run-cmd">$ {p.cmd}</div>}
+      {p.cmd && <div className="cz-run-cmd"><span className="flex-1">$ {p.cmd}</span><CopyBtn text={p.cmd} /></div>}
     </div>
   );
 }
