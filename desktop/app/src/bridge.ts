@@ -51,6 +51,12 @@ export interface DirListing { path: string; parent: string | null; dirs: DirEntr
 export function listDir(path: string | null): Promise<DirListing> {
   return invoke<DirListing>("list_dir", { path });
 }
+export function listSlashCommands(cwd: string | null, harness: string): Promise<string[]> {
+  return invoke<string[]>("list_slash_commands", { cwd, harness });
+}
+export function listFiles(cwd: string | null, query: string): Promise<string[]> {
+  return invoke<string[]>("list_files", { cwd, query });
+}
 export interface GitDiff {
   isRepo: boolean;
   branch: string;
@@ -217,6 +223,18 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       return Object.values(usage).sort((a, b) => b.calls - a.calls);
     case "save_paste":
       return `/tmp/parley-attachments/${(args as { name?: string })?.name || "paste.png"}`;
+    case "list_slash_commands": {
+      const h = (args as { harness?: string })?.harness;
+      const all = h === "claude" ? ["/review", "/test", "/commit", "/explain", "/security-review", "/refactor"]
+        : h === "codex" ? ["/plan", "/fix", "/tests"]
+        : [];
+      return all;
+    }
+    case "list_files": {
+      const q = ((args as { query?: string })?.query || "").toLowerCase();
+      const files = ["src/main.rs", "src/App.tsx", "src/bridge.ts", "README.md", "Cargo.toml", "src/components/Chat.tsx", "docs/design.md"];
+      return files.filter((f) => f.toLowerCase().includes(q)).slice(0, 60);
+    }
     case "list_dir": {
       const path = (args as { path?: string | null })?.path || "/home/dev";
       const kids = path === "/home/dev"

@@ -2,10 +2,10 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Collapsible, CommandPalette, Input, Kbd, Popover, ScrollArea, Spinner, Switch } from "./cruz";
 import {
-  invoke, listDir, onChatEvent, pickFolder, savePaste,
+  invoke, listDir, listFiles, listSlashCommands, onChatEvent, pickFolder, savePaste,
   type AgentInfo, type AgentList, type AgentUsage, type ChatEvent, type DirListing, type GitDiff, type Panelist, type SendReq,
 } from "./bridge";
-import { CODE_MAP, DEFAULT_PANEL, NEEDS_PROVIDER, PRESETS, color, display } from "./agents";
+import { DEFAULT_PANEL, NEEDS_PROVIDER, PRESETS, color, display } from "./agents";
 
 interface Pane { agent: string; text: string; warm: boolean; cmd?: string; done: boolean; code?: number; ms?: number; }
 interface Msg {
@@ -108,6 +108,7 @@ function Console({ chatId, onBusy }: { chatId: string; onBusy: (busy: boolean) =
   const [palette, setPalette] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
   const [folderOpen, setFolderOpen] = useState(false);
+  const [slashCmds, setSlashCmds] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const seq = useRef(0);
@@ -153,6 +154,12 @@ function Console({ chatId, onBusy }: { chatId: string; onBusy: (busy: boolean) =
 
   useEffect(() => { onBusy(busy); }, [busy, onBusy]);
 
+  // harness slash commands for the active primary (for `/` autocomplete)
+  useEffect(() => {
+    const h = primary === "auto" ? "claude" : primary;
+    listSlashCommands(cwd || null, h).then(setSlashCmds).catch(() => setSlashCmds([]));
+  }, [primary, cwd]);
+
   // panel ops
   const addPanelist = (agent: string) => setPanel((p) => [...p, { id: "p" + ++pid.current, agent, model: "", provider: "" }]);
   const removePanelist = (id: string) => setPanel((p) => p.filter((x) => x.id !== id));
@@ -168,24 +175,14 @@ function Console({ chatId, onBusy }: { chatId: string; onBusy: (busy: boolean) =
     ...agents.filter((a) => a.installed).map((a) => ({ key: a.name, label: `Primary → ${display(a.name)}`, run: () => setPrimary(a.name) })),
   ], [agents, fuse, refreshDiff]);
 
-  function parseMention(text: string): { target: string; prompt: string } | null {
-    const m = text.match(/^@([a-zA-Z0-9_-]+)\s+([\s\S]+)$/);
-    if (!m) return null;
-    const tag = m[1].toLowerCase();
-    if (tag === "panel" || tag === "fuse") return { target: "fuse", prompt: m[2] };
-    if (tag === "auto") return { target: "auto", prompt: m[2] };
-    const name = CODE_MAP[tag] || tag;
-    if (agents.find((a) => a.name === name)) return { target: name, prompt: m[2] };
-    return null;
-  }
-
   async function run() {
     const raw = input.trim();
     if ((!raw && attachments.length === 0) || busy) return;
-    const mention = parseMention(raw);
-    let prompt = mention ? mention.prompt : raw;
-    const fuseOn = mention ? mention.target === "fuse" : fuse;
-    const target = fuseOn ? "fuse" : mention ? mention.target : primary;
+    // Routing is via the primary picker + Fuse toggle. `/` and `@` in the text
+    // are the harness's own command + file-ref syntax, passed through verbatim.
+    let prompt = raw;
+    const fuseOn = fuse;
+    const target = fuseOn ? "fuse" : primary;
     const usePanel: Panelist[] = fuseOn ? (panel.length >= 2 ? panel : DEFAULT_PANEL.map((a) => ({ id: a, agent: a }))) : [];
     if (attachments.length) prompt = attachments.map((a) => `[Attached image: ${a.path}]`).join("\n") + "\n" + prompt;
 
@@ -266,8 +263,8 @@ function Console({ chatId, onBusy }: { chatId: string; onBusy: (busy: boolean) =
               </div>
             )}
           </div>
-          <Composer input={input} setInput={setInput} run={run} busy={busy} fuse={fuse} primary={primary} attachments={attachments} setAttachments={setAttachments} commands={commands} history={history} histIdx={histIdx} inputRef={inputRef}
-            mentionHint={(() => { const m = parseMention(input.trim()); return m ? (m.target === "fuse" ? "panel" : display(m.target)) : ""; })()} />
+          <Composer input={input} setInput={setInput} run={run} busy={busy} fuse={fuse} primary={primary} attachments={attachments} setAttachments={setAttachments}
+            slashCmds={slashCmds} fileSearch={(q) => listFiles(cwd || null, q)} history={history} histIdx={histIdx} inputRef={inputRef} />
         </main>
 
         {cockpit && <Cockpit diff={diff} onRefresh={refreshDiff} onClose={() => setCockpit(false)} />}
@@ -365,15 +362,39 @@ function FolderModal({ initial, onClose, onPick, onNative }: { initial: string; 
 function Composer(props: {
   input: string; setInput: (v: string) => void; run: () => void; busy: boolean; fuse: boolean; primary: string;
   attachments: Attachment[]; setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
-  commands: Command[]; history: string[]; histIdx: React.MutableRefObject<number>; inputRef: React.RefObject<HTMLTextAreaElement>; mentionHint: string;
+  slashCmds: string[]; fileSearch: (q: string) => Promise<string[]>;
+  history: string[]; histIdx: React.MutableRefObject<number>; inputRef: React.RefObject<HTMLTextAreaElement>;
 }) {
-  const { input, setInput, run, busy, fuse, primary, attachments, setAttachments, commands, history, histIdx, inputRef } = props;
+  const { input, setInput, run, busy, fuse, primary, attachments, setAttachments, slashCmds, fileSearch, history, histIdx, inputRef } = props;
   const [sel, setSel] = useState(0);
-  const slash = input.startsWith("/");
-  const query = slash ? input.slice(1).toLowerCase().trim() : "";
-  const matches = slash ? commands.filter((c) => c.key.startsWith(query) || c.label.toLowerCase().includes(query)) : [];
+  const [files, setFiles] = useState<string[]>([]);
+
+  // `/` = harness command (only while typing the command name, no space yet).
+  const slashMode = input.startsWith("/") && !input.slice(1).includes(" ");
+  const slashQ = slashMode ? input.slice(1).toLowerCase() : "";
+  const slashMatches = slashMode ? slashCmds.filter((c) => c.slice(1).toLowerCase().startsWith(slashQ)) : [];
+  // `@` = file reference: token immediately before the end of the input.
+  const fileMatch = !slashMode ? input.match(/@([^\s@]*)$/) : null;
+  const fileMode = !!fileMatch;
+  const fileQ = fileMatch ? fileMatch[1] : "";
+
   useEffect(() => { setSel(0); }, [input]);
+  useEffect(() => {
+    if (!fileMode) { setFiles([]); return; }
+    let live = true;
+    fileSearch(fileQ).then((f) => { if (live) setFiles(f); }).catch(() => {});
+    return () => { live = false; };
+  }, [fileMode, fileQ, fileSearch]);
+
+  const menuItems = slashMode ? slashMatches.slice(0, 8) : fileMode ? files.slice(0, 8) : [];
+  const menuKind: "slash" | "file" | null = slashMode && slashMatches.length ? "slash" : fileMode && files.length ? "file" : null;
+
   function grow(t: HTMLTextAreaElement) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 180) + "px"; }
+  function pick(item: string) {
+    if (menuKind === "slash") setInput(item + " ");
+    else if (menuKind === "file" && fileMatch) setInput(input.slice(0, fileMatch.index) + "@" + item + " ");
+    inputRef.current?.focus();
+  }
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const imgs = Array.from(e.clipboardData.items).filter((i) => i.type.startsWith("image/"));
     if (!imgs.length) return;
@@ -381,23 +402,25 @@ function Composer(props: {
     for (const it of imgs) { const file = it.getAsFile(); if (!file) continue; const buf = new Uint8Array(await file.arrayBuffer()); const name = file.name || `paste-${Date.now()}.png`; try { const path = await savePaste(name, buf); setAttachments((a) => [...a, { path, name }]); } catch { /* ignore */ } }
   }
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (slash && matches.length) {
-      if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => (s + 1) % matches.length); return; }
-      if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => (s - 1 + matches.length) % matches.length); return; }
-      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); matches[sel]?.run(); setInput(""); return; }
-      if (e.key === "Escape") { e.preventDefault(); setInput(""); return; }
+    if (menuKind && menuItems.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => (s + 1) % menuItems.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => (s - 1 + menuItems.length) % menuItems.length); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(menuItems[sel]); return; }
+      if (e.key === "Escape") { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); (e.target as HTMLTextAreaElement).focus(); return; }
     }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); return; }
     if (e.key === "ArrowUp" && history.length && (input === "" || histIdx.current >= 0)) { e.preventDefault(); histIdx.current = Math.min(histIdx.current + 1, history.length - 1); setInput(history[history.length - 1 - histIdx.current]); return; }
     if (e.key === "ArrowDown" && histIdx.current >= 0) { e.preventDefault(); histIdx.current -= 1; setInput(histIdx.current < 0 ? "" : history[history.length - 1 - histIdx.current]); return; }
   }
+  const caret = busy ? "var(--color-warning)" : slashMode ? "var(--color-info)" : fileMode ? "var(--color-success)" : "var(--color-primary)";
   return (
     <div className="border-t border-surface-border px-4 py-3 relative" style={{ background: "rgba(10,11,13,.6)" }}>
-      {slash && matches.length > 0 && (
+      {menuKind && menuItems.length > 0 && (
         <div className="cz-slash">
-          {matches.slice(0, 8).map((c, i) => (
-            <button key={c.key} className={"cz-slash-item" + (i === sel ? " cz-slash-sel" : "")} onMouseEnter={() => setSel(i)} onClick={() => { c.run(); setInput(""); inputRef.current?.focus(); }}>
-              <span className="text-text-tertiary">/{c.key}</span><span className="text-text-secondary">{c.label}</span>
+          <div className="cz-slash-cap">{menuKind === "slash" ? `${display(primary)} commands` : "files"}</div>
+          {menuItems.map((it, i) => (
+            <button key={it} className={"cz-slash-item" + (i === sel ? " cz-slash-sel" : "")} onMouseEnter={() => setSel(i)} onClick={() => pick(it)}>
+              {menuKind === "slash" ? <span className="text-text">{it}</span> : <><span style={{ color: "var(--color-success)" }}>@</span><span className="text-text">{it}</span></>}
             </button>
           ))}
         </div>
@@ -408,11 +431,11 @@ function Composer(props: {
         </div>
       )}
       <div className="cz-term">
-        <span className="cz-caret" style={{ color: busy ? "var(--color-warning)" : slash ? "var(--color-info)" : "var(--color-primary)" }}>{slash ? "/" : "❯"}</span>
-        <textarea ref={inputRef} rows={1} value={input} placeholder={fuse ? "message the panel…   @agent · /command · paste an image" : `message ${display(primary)}…   @agent · /command · paste an image`} onChange={(e) => { setInput(e.target.value); grow(e.target); }} onKeyDown={onKeyDown} onPaste={onPaste} />
+        <span className="cz-caret" style={{ color: caret }}>{slashMode ? "/" : fileMode ? "@" : "❯"}</span>
+        <textarea ref={inputRef} rows={1} value={input} placeholder={fuse ? "message the panel…   / command · @ file · paste image" : `message ${display(primary)}…   / command · @ file · paste image`} onChange={(e) => { setInput(e.target.value); grow(e.target); }} onKeyDown={onKeyDown} onPaste={onPaste} />
         <button className="cz-run" disabled={busy || (!input.trim() && attachments.length === 0)} onClick={run}>{busy ? <Spinner size="xs" /> : <><span>run</span><Kbd>⏎</Kbd></>}</button>
       </div>
-      <div className="text-[11px] text-text-tertiary mt-1.5 h-3 font-mono">{props.mentionHint ? <>→ <span style={{ color: "var(--color-primary)" }}>{props.mentionHint}</span></> : slash ? "command — ↑↓ select · ⏎ run" : ""}</div>
+      <div className="text-[11px] text-text-tertiary mt-1.5 h-3 font-mono">{menuKind === "slash" ? "harness command — ↑↓ select · ⏎ insert" : menuKind === "file" ? "file ref — ↑↓ select · ⏎ insert" : ""}</div>
     </div>
   );
 }
@@ -490,7 +513,7 @@ function Empty({ primary, fuse }: { primary: string; fuse: boolean }) {
       <div style={{ color: "var(--color-primary)" }}># parley — multi-agent dev console</div>
       <div className="mt-1">› primary: <span className="text-text-secondary">{display(primary)}</span>   fuse: <span className="text-text-secondary">{fuse ? "on" : "off"}</span>   (sessions resume warm — prompt cache reused)</div>
       <div>› <span className="text-text-secondary">📂 open</span> a folder · pick a primary in the rail · toggle <span className="text-text-secondary">fuse</span> &amp; build a panel (add the same agent twice at different models)</div>
-      <div>› <span className="text-text-secondary">@agent</span> to direct · <span className="text-text-secondary">/</span> commands · paste images · <Kbd>⌘</Kbd><Kbd>K</Kbd> palette · <Kbd>↑</Kbd> history</div>
+      <div>› <span className="text-text-secondary">/</span> {display(primary)} command · <span className="text-text-secondary">@</span> file ref · paste images · <Kbd>⌘</Kbd><Kbd>K</Kbd> for parley actions · <Kbd>↑</Kbd> history</div>
     </div>
   );
 }

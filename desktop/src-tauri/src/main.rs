@@ -960,6 +960,106 @@ fn reset_chat(state: State<'_, AppState>, chat_id: String) -> Result<(), String>
     Ok(())
 }
 
+/// List the harness's own slash commands available in `cwd` (for `/` autocomplete
+/// in the composer). Claude/Codex read their project (and user) command dirs;
+/// the command text is passed through to the agent, which runs it.
+#[tauri::command]
+fn list_slash_commands(cwd: Option<String>, harness: String) -> Result<Vec<String>, String> {
+    let base = resolve_cwd(&cwd);
+    let mut out = Vec::new();
+    match harness.as_str() {
+        "claude" => {
+            let proj = base.join(".claude").join("commands");
+            collect_md_commands(&proj, &proj, &mut out);
+            if let Ok(home) = std::env::var("HOME") {
+                let user = PathBuf::from(home).join(".claude").join("commands");
+                collect_md_commands(&user, &user, &mut out);
+            }
+        }
+        "codex" => {
+            let p = base.join(".codex").join("prompts");
+            collect_md_commands(&p, &p, &mut out);
+        }
+        _ => {}
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+fn collect_md_commands(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_md_commands(root, &p, out);
+        } else if p.extension().map(|x| x == "md").unwrap_or(false) {
+            if let Ok(rel) = p.strip_prefix(root) {
+                let name = rel
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace(['/', '\\'], ":");
+                out.push(format!("/{name}"));
+            }
+        }
+    }
+}
+
+/// Search files under `cwd` for `@`-file references. Skips VCS/build/hidden dirs;
+/// bounded so a huge tree stays responsive.
+#[tauri::command]
+fn list_files(
+    cwd: Option<String>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
+    let base = resolve_cwd(&cwd);
+    let q = query.to_lowercase();
+    let cap = limit.unwrap_or(60);
+    let mut out = Vec::new();
+    let mut budget: usize = 12_000;
+    walk_files(&base, &base, &q, cap, &mut out, &mut budget);
+    out.sort();
+    Ok(out)
+}
+
+fn walk_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    q: &str,
+    cap: usize,
+    out: &mut Vec<String>,
+    budget: &mut usize,
+) {
+    if out.len() >= cap || *budget == 0 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        if out.len() >= cap || *budget == 0 {
+            break;
+        }
+        *budget -= 1;
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" {
+            continue;
+        }
+        let p = e.path();
+        if p.is_dir() {
+            walk_files(root, &p, q, cap, out, budget);
+        } else if let Ok(rel) = p.strip_prefix(root) {
+            let rs = rel.to_string_lossy().into_owned();
+            if q.is_empty() || rs.to_lowercase().contains(q) {
+                out.push(rs);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DirEntry {
@@ -1119,7 +1219,9 @@ fn main() {
             git_discard,
             reset_chat,
             save_paste,
-            list_dir
+            list_dir,
+            list_slash_commands,
+            list_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running Parley desktop");
