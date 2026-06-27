@@ -7,8 +7,6 @@ import {
 } from "./bridge";
 import { CODE_MAP, DEFAULT_PANEL, NEEDS_PROVIDER, PRESETS, color, display } from "./agents";
 
-const CHAT_ID = "main";
-
 interface Pane { agent: string; text: string; warm: boolean; cmd?: string; done: boolean; code?: number; ms?: number; }
 interface Msg {
   id: string; role: "user" | "assistant"; text?: string;
@@ -40,7 +38,57 @@ function Dot({ agent, size = 8, warm = false }: { agent: string; size?: number; 
   return <span className={warm ? "cz-dot-warm" : ""} style={{ width: size, height: size, borderRadius: 999, background: color(agent), boxShadow: `0 0 8px -1px ${color(agent)}`, display: "inline-block", flexShrink: 0 }} />;
 }
 
+// ---- tab shell: many consoles at once --------------------------------------
+
+interface Tab { id: string; title: string; }
+
 export function App() {
+  const [tabs, setTabs] = useState<Tab[]>([{ id: "c1", title: "console 1" }]);
+  const [active, setActive] = useState("c1");
+  const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
+  const next = useRef(2);
+
+  const addTab = () => {
+    const n = next.current++;
+    const id = "c" + n;
+    setTabs((t) => [...t, { id, title: "console " + n }]);
+    setActive(id);
+  };
+  const closeTab = (id: string) => {
+    setTabs((t) => {
+      if (t.length <= 1) return t;
+      const idx = t.findIndex((x) => x.id === id);
+      const rest = t.filter((x) => x.id !== id);
+      if (active === id) setActive(rest[Math.max(0, idx - 1)].id);
+      return rest;
+    });
+  };
+
+  return (
+    <div className="flex flex-col h-screen">
+      <div className="cz-tabstrip" data-tauri-drag-region>
+        <div className="cz-tabstrip-pad" />
+        {tabs.map((t) => (
+          <div key={t.id} className={"cz-tab" + (t.id === active ? " cz-tab-active" : "")} onClick={() => setActive(t.id)}>
+            {busyMap[t.id] ? <span className="cz-tab-dot cz-dot-warm" style={{ background: "var(--color-warning)" }} /> : <span className="cz-tab-dot" style={{ background: "var(--color-text-tertiary)" }} />}
+            <span>{t.title}</span>
+            {tabs.length > 1 && <span className="cz-tab-x" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}>×</span>}
+          </div>
+        ))}
+        <button className="cz-tab-add" onClick={addTab} title="New console">+</button>
+      </div>
+      <div className="flex-1 min-h-0 relative">
+        {tabs.map((t) => (
+          <div key={t.id} style={{ display: t.id === active ? "block" : "none", height: "100%" }}>
+            <Console chatId={t.id} onBusy={(b) => setBusyMap((m) => ({ ...m, [t.id]: b }))} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Console({ chatId, onBusy }: { chatId: string; onBusy: (busy: boolean) => void }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [primary, setPrimary] = useState("claude");
   const [fuse, setFuse] = useState(false);
@@ -85,6 +133,7 @@ export function App() {
 
   useEffect(() => {
     return onChatEvent((e: ChatEvent) => {
+      if (e.chatId !== chatId) return; // each console only handles its own chat
       setMessages((prev) => prev.map((m) => {
         if (m.id !== e.msgId) return m;
         const next: Msg = { ...m, panes: { ...m.panes }, order: [...m.order] };
@@ -100,7 +149,9 @@ export function App() {
       }));
       requestAnimationFrame(() => { const el = logRef.current; if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240) el.scrollTop = el.scrollHeight; });
     });
-  }, []);
+  }, [chatId]);
+
+  useEffect(() => { onBusy(busy); }, [busy, onBusy]);
 
   // panel ops
   const addPanelist = (agent: string) => setPanel((p) => [...p, { id: "p" + ++pid.current, agent, model: "", provider: "" }]);
@@ -154,7 +205,7 @@ export function App() {
     setBusy(true);
     requestAnimationFrame(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; });
 
-    const req: SendReq = { chatId: CHAT_ID, msgId: id, target, model: model || null, provider: provider || null, prompt, cwd: cwd || null, panel: usePanel, judge: fuseOn ? judge : null, yolo };
+    const req: SendReq = { chatId, msgId: id, target, model: model || null, provider: provider || null, prompt, cwd: cwd || null, panel: usePanel, judge: fuseOn ? judge : null, yolo };
     try { await invoke("send_message", { req }); }
     catch (e) { setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, status: "error: " + String(e) } : m))); }
     finally { setBusy(false); setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, done: true } : m))); refreshUsage(); refreshDiff(); }
@@ -163,9 +214,9 @@ export function App() {
   const paletteItems = commands.map((c) => ({ id: c.key, group: ["fuse", "single", "clear", "cockpit", "open"].includes(c.key) ? "Actions" : "Primary agent", label: c.label, onSelect: c.run }));
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col h-full">
       {/* topbar */}
-      <header className="flex items-center gap-2.5 px-3 h-11 border-b border-surface-border font-mono text-[12.5px]" style={{ paddingLeft: 84, background: "rgba(10,11,13,.8)", backdropFilter: "blur(16px)" }} data-tauri-drag-region>
+      <header className="flex items-center gap-2.5 px-3 h-11 border-b border-surface-border font-mono text-[12.5px]" style={{ background: "rgba(10,11,13,.8)", backdropFilter: "blur(16px)" }}>
         <span className="flex items-center gap-1.5 font-semibold" style={{ fontFamily: "var(--font-sans)" }}><span style={{ color: "var(--color-primary)" }}>⚖</span> parley</span>
         <button className="cz-pill" onClick={() => setFolderOpen(true)} title="Open folder (set working dir)">📂 open</button>
         <div className="flex-1" />
