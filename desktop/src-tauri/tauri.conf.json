@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "identifier": "ai.parley.desktop",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../app/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm --prefix ../app run dev",
+    "beforeBuildCommand": "npm --prefix ../app run build"
   },
   "app": {
     "withGlobalTauri": true,

@@ -33,7 +33,7 @@ use tokio::process::Command;
 
 /// Cap on how much catch-up context is replayed in one turn, to stay responsive.
 const MAX_CONTEXT_CHARS: usize = 12_000;
-const DEFAULT_PANEL: &[&str] = &["claude", "codex", "gemini"];
+const DEFAULT_PANEL: &[&str] = &["claude", "codex", "antigravity"];
 const DEFAULT_JUDGE: &str = "claude";
 
 // ---- shared, warm chat state ----------------------------------------------
@@ -102,6 +102,7 @@ async fn resolve_invocation(
     target: &str,
     prompt: &str,
     model: &Option<String>,
+    provider: &Option<String>,
     yolo: bool,
     session: &SessionFlags,
 ) -> Result<Invocation, String> {
@@ -112,6 +113,12 @@ async fn resolve_invocation(
         prompt.to_string(),
         "--dry-run".into(),
     ];
+    if let Some(provider) = provider {
+        if !provider.trim().is_empty() {
+            args.push("--provider".into());
+            args.push(provider.clone());
+        }
+    }
     if let Some(model) = model {
         if !model.trim().is_empty() {
             args.push("-m".into());
@@ -179,6 +186,8 @@ struct SendReq {
     target: String, // auto | fuse | solve | <agent>
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
     prompt: String,
     #[serde(default)]
     cwd: Option<String>,
@@ -525,7 +534,8 @@ async fn send_message(
         let inv = resolve_invocation(
             "auto",
             &req.prompt,
-            &req.model,
+            &None,
+            &None,
             req.yolo,
             &SessionFlags::default(),
         )
@@ -557,10 +567,18 @@ async fn send_message(
         let req = req.clone();
         let cwd = cwd.clone();
         handles.push(tokio::spawn(async move {
+            // model/provider apply to a single primary agent; in fuse mode the
+            // panelists use their defaults and the judge gets the override.
+            let (model, provider) = if req.target == "fuse" {
+                (None, None)
+            } else {
+                (req.model.clone(), req.provider.clone())
+            };
             match resolve_invocation(
                 &plan.agent,
                 &plan.prompt,
-                &req.model,
+                &model,
+                &provider,
                 req.yolo,
                 &plan.session,
             )
@@ -615,10 +633,12 @@ async fn send_message(
             .clone()
             .unwrap_or_else(|| DEFAULT_JUDGE.to_string());
         let judge_prompt = build_judge_prompt(&req.prompt, &answers);
+        // The judge is the primary harness, so it carries the chosen model/provider.
         let inv = resolve_invocation(
             &judge,
             &judge_prompt,
             &req.model,
+            &req.provider,
             req.yolo,
             &SessionFlags::default(),
         )

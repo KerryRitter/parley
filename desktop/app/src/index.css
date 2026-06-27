@@ -1,0 +1,205 @@
+@import "tailwindcss";
+
+/* CruzUI ships TS source with Tailwind utility classes — tell v4 to scan it so
+   those classes are generated. */
+@source "../node_modules/@cruzjs/ui/src/**/*.{ts,tsx}";
+
+/* Parley theme — these @theme tokens are BOTH CSS variables (var(--color-…),
+   used directly by some CruzUI components) AND Tailwind v4 utilities
+   (bg-surface, text-text-muted, ring-primary/30, ease-smooth, …). */
+@theme {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* primary — Parley amber */
+  --color-primary: #f0a35e;
+  --color-primary-dark: #e07b3c;
+  --color-primary-light: #f5b87f;
+  --color-primary-lighter: #f8ca9b;
+  --color-primary-subtle: #2a1f14;
+  --color-accent: #f0a35e;
+
+  /* surfaces (dark) */
+  --color-surface: #14161d;
+  --color-surface-light: #181b23;
+  --color-surface-lighter: #1e222c;
+  --color-surface-border: #2a2f3a;
+  --color-surface-invert: #f1f2f5;
+  --color-input-border: #2a2f3a;
+
+  /* text */
+  --color-text: #f1f2f5;
+  --color-text-strong: #ffffff;
+  --color-text-secondary: #aab0bd;
+  --color-text-muted: #8a90a0;
+  --color-text-tertiary: #646b7a;
+  --color-text-on-invert: #0c0d11;
+
+  /* status */
+  --color-success: #5ec98a;
+  --color-success-dark: #3da06a;
+  --color-success-text: #7fd9a3;
+  --color-success-bg: #14241b;
+  --color-success-border: #2f6b48;
+  --color-success-subtle: #16291e;
+  --color-danger: #e9695f;
+  --color-danger-dark: #c44b42;
+  --color-danger-text: #f08a82;
+  --color-warning: #e0a23c;
+  --color-warning-text: #f0c074;
+  --color-info: #6a9bff;
+  --color-info-subtle: #16203a;
+
+  /* tokens some components reference directly for inverted/dark elements */
+  --color-dark-surface: #0b0c0f;
+  --color-dark-border: #2a2f3a;
+  --color-dark-text: #f1f2f5;
+  --color-dark-text-muted: #8a90a0;
+
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* App chrome (not from CruzUI) */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background:
+    radial-gradient(1100px 480px at 50% -12%, rgba(240, 163, 94, 0.06), transparent 70%),
+    linear-gradient(180deg, #0d0e13 0%, #0b0c0f 42%);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+* {
+  box-sizing: border-box;
+}
+
+/* App-level helper classes (Parley chrome that isn't a CruzUI component) */
+.cz-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 999px;
+  background: var(--color-surface-light);
+  border: 1px solid var(--color-surface-border);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s;
+}
+.cz-pill:hover {
+  background: var(--color-surface-lighter);
+}
+.cz-pill[data-set="1"] {
+  color: var(--color-text);
+  border-color: var(--color-primary);
+}
+.cz-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--color-surface-light);
+  border: 1px solid var(--color-surface-border);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  transition: color 0.14s, border-color 0.14s, background 0.14s;
+}
+.cz-icon:hover {
+  color: var(--color-text);
+  background: var(--color-surface-lighter);
+}
+.cz-icon-on {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+.cz-preset {
+  background: var(--color-surface-light);
+  border: 1px solid var(--color-surface-border);
+  color: var(--color-text-muted);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+.cz-preset:hover {
+  color: var(--color-text);
+  border-color: var(--color-primary);
+}
+.cz-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-surface-light);
+  border: 1px solid var(--color-surface-border);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 12px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.cz-chip[data-on="0"] {
+  opacity: 0.4;
+}
+.cz-chip:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+.cz-mini {
+  background: var(--color-surface-light);
+  border: 1px solid var(--color-surface-border);
+  color: var(--color-text-muted);
+  border-radius: 7px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.cz-mini:hover {
+  color: var(--color-text);
+}
+.cz-suggestion {
+  background: var(--color-surface);
+  border: 1px solid var(--color-surface-border);
+  color: var(--color-text-muted);
+  border-radius: 999px;
+  padding: 8px 15px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.14s;
+}
+.cz-suggestion:hover {
+  color: var(--color-text);
+  border-color: var(--color-primary);
+  transform: translateY(-1px);
+}
+.cz-pre {
+  background: #070809;
+  border: 1px solid var(--color-surface-border);
+  border-radius: 7px;
+  padding: 11px 13px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.6px;
+  line-height: 1.5;
+  white-space: pre;
+  margin: 6px 0;
+}
+.cz-code {
+  background: var(--color-surface-lighter);
+  border: 1px solid var(--color-surface-border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  color: var(--color-primary);
+}

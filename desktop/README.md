@@ -5,12 +5,12 @@
 **One chat. Every agent. Fused.**
 
 A small, fast desktop chat app over the coding-agent CLIs already on your
-machine — Claude, Codex, Gemini, and more. Pick **Auto** to route to the best
-agent for a prompt, **Fuse** to ask a panel and synthesize one answer, **Solve**
-to escalate when one gets stuck, or send straight to a single agent. One
-conversation, switchable per message.
+machine — Claude, Codex, Antigravity, and more. Pick a **primary** agent, flip on
+**Fuse** to convene a panel your primary then judges, and switch models (and
+provider, for Cursor/OpenCode) inline. One conversation, warm sessions
+underneath.
 
-Built with **Tauri** (Rust + native webview) — a ~8 MB app, not a 150 MB one.
+Built with **Tauri** (Rust) + **React** + **[CruzUI](https://www.cruzjs.dev/)**.
 
 </div>
 
@@ -18,131 +18,89 @@ Built with **Tauri** (Rust + native webview) — a ~8 MB app, not a 150 MB one.
 
 ## What makes it more than a chat box
 
-One conversation, every agent underneath — and three things a one-shot CLI call
-can't give you:
+One conversation, every agent underneath — with the things a one-shot CLI call
+can't give you (all implemented in the Rust backend, see [../README.md](../README.md)):
 
-- **Warm session pinning.** Each agent keeps a *resumed* session per chat
-  (`claude --session-id`/`--resume`, `codex exec resume`, `gemini --resume`), so
-  follow-ups reuse that agent's own warm prompt cache instead of re-sending the
-  whole transcript cold. Turns marked **warm** in the UI did exactly this.
-- **Shared cross-agent memory.** There's one canonical transcript. When a message
-  goes to an agent, it resumes its own warm thread and is fed only the *delta* —
-  what the *other* agents said since it last spoke — so every agent stays in the
-  same conversation without paying to replay all of it. Type `@gemini …`,
-  `@panel …`, or `@auto …` to direct a single message; they all share the thread.
-- **Live fan-out + fusion.** Fuse streams every panelist into its own pane
-  concurrently, then a judge synthesizes — the `par fuse` engine, but live. The
-  judge's CONSENSUS / CONTRADICTIONS are surfaced as a compact strip.
+- **Primary + Fuse.** Choose your primary agent; toggle **Fuse** and the same
+  message fans out to a panel (configurable chips) that your **primary judges**
+  into one answer — panes stream live with each agent's color, a consensus strip
+  (agree/clash), and the fused result.
+- **Warm session pinning.** Each agent keeps a *resumed* session per chat, so
+  follow-ups reuse its warm prompt cache. Turns are badged **warm**.
+- **Shared cross-agent memory.** One canonical transcript; each agent is fed only
+  the *delta* since it last spoke. `@agent` / `@panel` / `@auto` direct a single
+  message.
+- **Model picker.** Inline model selection with quick-presets; **provider +
+  model** for Cursor/OpenCode.
+- **Code cockpit.** Live `git diff` of the agents' file changes alongside the chat.
 
-Plus a **code cockpit** (⌥): point at a repo and watch the agents' `git diff`
-live, with a guarded discard. And a **usage panel** (⚙): per-agent calls, time,
-and which sessions are warm.
+Because it drives the real CLIs, it inherits each agent's own auth,
+subscription, and caching — no API keys, your code never leaves your machine.
 
-## Why it's just a thin shell
-
-The app has no model logic of its own. It drives the [`par`](../README.md)
-binary — Parley's CLI — which owns all the harness/routing/fusion/session logic.
-For any message it asks `par … --dry-run` (with `--session-id`/`--resume-id` for
-warm continuity) for the exact command to run, then spawns that and streams the
-output live into the UI.
-
-That means the desktop app inherits, for free, everything `par` already does:
-**each agent's own auth, subscription, and prompt caching** — no API keys, your
-code never leaves your machine.
-
-```
-┌─ ⚖ Parley ────────────── Auto · Fuse · Solve · claude · codex … ─┐
-│                                                                  │
-│                          design a rate limiter            (you) │
-│                                                                  │
-│  ⚖ Fused · judge claude                                          │
-│  ┌ claude ✓ ┐ ┌ codex ✓ ┐ ┌ gemini ✓ ┐                          │
-│  │ token..  │ │ leaky..  │ │ sliding… │   ← live panes           │
-│  └──────────┘ └──────────┘ └──────────┘                          │
-│  CONSENSUS: a token bucket per tenant…                          │
-│                                                                  │
-│  > │ Message the panel…                                    [ ↑ ] │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-## Prerequisites
-
-1. **`par` on your PATH.** Install Parley (see the [root README](../README.md));
-   the app finds `par` on `PATH`, or set `PARLEY_BIN=/abs/path/to/par`.
-2. **At least one agent CLI installed** (`par install <agent>`), authenticated.
-3. **Rust** + the Tauri system deps for your OS
-   (Linux: `webkit2gtk-4.1`, `libsoup-3.0`; see
-   <https://tauri.app/start/prerequisites/>).
-
-## Run it
-
-From the repo root:
-
-```sh
-# one-time: the Tauri CLI (only needed for hot-reload dev + bundling)
-cargo install tauri-cli --version '^2'
-
-# dev (hot-reload)
-cargo tauri dev --config desktop/src-tauri/tauri.conf.json
-```
-
-Or with no extra tooling — the frontend is static and embedded at build, so a
-plain cargo run works:
-
-```sh
-cargo run -p parley-desktop
-```
-
-## Build a distributable app
-
-```sh
-cargo tauri build --config desktop/src-tauri/tauri.conf.json
-# → desktop/src-tauri/target/release/bundle/ (.app / .dmg / .deb / .AppImage / .msi)
-```
-
-## How it's wired
+## Architecture
 
 ```text
 desktop/
-  ui/                     static frontend (no npm, no bundler)
-    index.html            chat layout
-    styles.css            dark, responsive theme
-    app.js                Tauri IPC + streaming render (global __TAURI__ API)
-  src-tauri/
-    src/main.rs           backend: list_agents + send_message commands
-                          · resolves argv via `par --dry-run`
-                          · spawns + streams stdout/stderr as `chat-event`s
-                          · orchestrates fuse panes + judge concurrently
-    tauri.conf.json       window + withGlobalTauri (no JS toolchain needed)
-    capabilities/         window permissions (core events)
+  app/                    React + CruzUI frontend (Vite)
+    src/
+      App.tsx             the chat UI (CruzUI: Select, Switch, Popover, Card,
+                          AiPromptInput, ScrollArea, Badge, …)
+      bridge.ts           Tauri invoke/listen + a browser mock for dev/preview
+      agents.ts           per-agent colors, names, model presets
+      cruz.ts             cherry-picked CruzUI components (by subpath)
+      index.css           Tailwind v4 + the Parley theme tokens (@theme)
+  src-tauri/              Rust backend (stateful orchestrator over `par`)
+    src/main.rs           list_agents · send_message · git_diff · usage_stats
+    tauri.conf.json       loads the Vite dev server / built dist
 ```
 
-The frontend uses the global `window.__TAURI__` API (`withGlobalTauri`), so there
-is **no Node/npm build step** — `ui/` is plain HTML/CSS/JS, embedded into the
-binary at compile time.
+The frontend has no model logic — it drives the [`par`](../README.md) binary via
+the Tauri backend, which owns all harness/route/fuse/session logic.
 
-## Settings (gear icon)
+## Prerequisites
 
-- **Working directory** — where the agents operate (defaults to `$HOME`). Point
-  it at a repo to chat *about that codebase*.
-- **Yolo** — let agents act without per-action prompts (on by default, so
-  headless calls don't hang). Turn off for untrusted prompts.
-- **Fuse panel** — comma-separated agents for Fuse mode (blank = `claude, codex,
-  gemini`).
+1. **`par` on your PATH** (see the [root README](../README.md)); or set
+   `PARLEY_BIN=/abs/path/to/par`.
+2. **At least one agent CLI installed** (`par install <agent>`), authenticated.
+3. **Node ≥ 18** and **Rust**, plus Tauri's system deps
+   (Linux: `webkit2gtk-4.1`, `libsoup-3.0` — see
+   <https://tauri.app/start/prerequisites/>).
+4. **CruzUI access.** `@cruzjs/ui` resolves from the registry your npm is
+   configured for (the dev machine routes `@cruzjs` → a local Verdaccio). With
+   that registry reachable, `npm install` works as normal.
+
+## Run it
+
+```sh
+cd desktop/app && npm install        # installs React + CruzUI + Tauri api
+cd ..
+
+# one-time: the Tauri CLI
+cargo install tauri-cli --version '^2'
+
+# dev (Vite HMR + the Tauri window)
+cargo tauri dev --config desktop/src-tauri/tauri.conf.json
+
+# production bundle (.app / .dmg / .deb / .AppImage / .msi)
+cargo tauri build --config desktop/src-tauri/tauri.conf.json
+```
+
+The frontend can also be previewed in a plain browser without Tauri — `bridge.ts`
+falls back to a mock that streams realistic events:
+
+```sh
+cd desktop/app && npm run dev    # http://localhost:1420
+```
 
 ## Notes & limits
 
-- **Warm pinning** is exact for **claude** (we own the session id via
-  `--session-id`, then `--resume <id>` — correct even with several chats open).
-  **codex**/**gemini** resume the *most recent* session here (`--last` /
-  `latest`), which is correct for a single active chat; other agents fall back to
-  a cold context preamble. The UI badges each turn warm/cold honestly.
-- Output streams at line granularity from each CLI; token-level streaming
-  (`--output-format stream-json`) is a future enhancement.
-- Per-agent **token/cost** numbers aren't shown yet (the usage panel reports
-  calls + wall-clock + warm/cold); reading them needs each CLI's JSON usage
-  envelope and is future work.
-- The cockpit shows `git diff` and offers a guarded **discard**
-  (`git checkout -- .`); per-hunk accept/reject is future work.
-- The app is a separate workspace crate with its own dependencies; the core
-  `par` CLI stays dependency-free.
+- Warm pinning is exact for **claude** (own session id); **codex**/**antigravity**
+  /**gemini** resume the most recent session here; others fall back to a cold
+  context preamble. Badged honestly per turn.
+- Output streams at line granularity; token-level streaming is future work.
+- The model picker is free-text with presets (model names change fast) — the
+  presets are starting points, edit freely.
+- `@cruzjs/ui` ships TS source coupled (via its barrel) to the CruzJS app
+  framework; this app imports the components it needs **by subpath** (`cruz.ts`)
+  to stay a standalone Tauri app. Tailwind v4 scans the package for classes via
+  the `@source` directive in `index.css`.
