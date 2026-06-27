@@ -4,6 +4,7 @@
 
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 export interface AgentInfo {
   name: string;
@@ -24,6 +25,7 @@ export interface ChatEvent {
   warm?: boolean;
   code?: number;
   ms?: number;
+  cmd?: string;
 }
 export interface SendReq {
   chatId: string;
@@ -39,6 +41,7 @@ export interface SendReq {
 }
 export interface GitDiff {
   isRepo: boolean;
+  branch: string;
   files: string[];
   diff: string;
 }
@@ -72,6 +75,21 @@ export async function invoke<T = unknown>(cmd: string, args?: Record<string, unk
   return mockInvoke(cmd, args) as Promise<T>;
 }
 
+/// Open a native folder picker (Tauri) or fall back to a prompt in the browser.
+export async function pickFolder(): Promise<string | null> {
+  if (IS_TAURI) {
+    const r = await openDialog({ directory: true, multiple: false });
+    return typeof r === "string" ? r : null;
+  }
+  const v = window.prompt("Working directory path:");
+  return v && v.trim() ? v.trim() : null;
+}
+
+/// Save a pasted image; returns the saved file path.
+export async function savePaste(name: string, bytes: Uint8Array): Promise<string> {
+  return invoke<string>("save_paste", { name, data: Array.from(bytes) });
+}
+
 // ---- mock backend (browser preview only) ----------------------------------
 
 const seen = new Set<string>();
@@ -96,8 +114,18 @@ const SAMPLE: Record<string, string[]> = {
   opencode: ["A leaky bucket smooths bursts better for shared infra."],
 };
 
+const BIN: Record<string, string> = {
+  claude: "claude -p «prompt»",
+  codex: "codex exec «prompt»",
+  antigravity: "agy «prompt»",
+  cursor: "cursor-agent -p «prompt»",
+  opencode: "opencode run «prompt»",
+};
+
 async function streamPane(req: SendReq, pane: string, agent: string, lines: string[], warm: boolean) {
-  dispatch({ chatId: req.chatId, msgId: req.msgId, pane, kind: "start", agent, warm });
+  const base = BIN[agent] ?? `${agent} «prompt»`;
+  const cmd = `${base}${warm ? " --resume 1a2b3c" : ""} --dangerously-skip-permissions`;
+  dispatch({ chatId: req.chatId, msgId: req.msgId, pane, kind: "start", agent, warm, cmd });
   for (const ln of lines) {
     await sleep(85);
     dispatch({ chatId: req.chatId, msgId: req.msgId, pane, kind: "chunk", text: ln + "\n" });
@@ -160,9 +188,12 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       return null;
     case "usage_stats":
       return Object.values(usage).sort((a, b) => b.calls - a.calls);
+    case "save_paste":
+      return `/tmp/parley-attachments/${(args as { name?: string })?.name || "paste.png"}`;
     case "git_diff":
       return {
         isRepo: true,
+        branch: "feat/router-steals",
         files: [" M src/main.rs", " M README.md", "?? notes.txt"],
         diff:
           "diff --git a/src/main.rs b/src/main.rs\n@@ -1,3 +1,5 @@\n-fn main() {}\n+fn main() {\n+    println!(\"hello\");\n+}\n",

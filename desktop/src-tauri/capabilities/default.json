@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Capabilities for the Parley desktop window: core events + window controls.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

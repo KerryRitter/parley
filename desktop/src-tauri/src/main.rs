@@ -170,6 +170,24 @@ struct ChatEvent {
     code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ms: Option<u128>,
+    /// The resolved command being run, with long args (the prompt) redacted —
+    /// surfaced in the UI so you can see the actual invocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cmd: Option<String>,
+}
+
+/// A human-readable command line with long args (prompt/context) redacted, so
+/// the UI can show the real invocation without leaking prompt text.
+fn redacted_cmd(inv: &Invocation) -> String {
+    let mut parts = vec![inv.command.clone()];
+    for a in &inv.args {
+        parts.push(if a.chars().count() > 40 {
+            "«prompt»".to_string()
+        } else {
+            a.clone()
+        });
+    }
+    parts.join(" ")
 }
 
 fn emit(app: &AppHandle, ev: ChatEvent) {
@@ -326,6 +344,7 @@ async fn stream_command(
             warm: Some(warm),
             code: None,
             ms: None,
+            cmd: Some(redacted_cmd(inv)),
         },
     );
 
@@ -362,6 +381,7 @@ async fn stream_command(
                     warm: None,
                     code: None,
                     ms: None,
+                    cmd: None,
                 },
             );
         }
@@ -388,6 +408,7 @@ async fn stream_command(
                     warm: None,
                     code: None,
                     ms: None,
+                    cmd: None,
                 },
             );
         }
@@ -410,6 +431,7 @@ async fn stream_command(
             warm: None,
             code: status.code(),
             ms: Some(ms),
+            cmd: None,
         },
     );
     Ok((full, ms))
@@ -428,6 +450,7 @@ fn emit_error(app: &AppHandle, chat_id: &str, msg_id: &str, pane: &str, message:
             warm: None,
             code: None,
             ms: None,
+            cmd: None,
         },
     );
 }
@@ -777,6 +800,7 @@ fn usage_stats(state: State<'_, AppState>) -> Result<Vec<AgentUsage>, String> {
 #[serde(rename_all = "camelCase")]
 struct GitDiff {
     is_repo: bool,
+    branch: String,
     files: Vec<String>,
     diff: String,
 }
@@ -793,6 +817,7 @@ async fn git_diff(cwd: Option<String>) -> Result<GitDiff, String> {
     if !status.status.success() {
         return Ok(GitDiff {
             is_repo: false,
+            branch: String::new(),
             files: vec![],
             diff: String::new(),
         });
@@ -801,6 +826,13 @@ async fn git_diff(cwd: Option<String>) -> Result<GitDiff, String> {
         .lines()
         .map(|l| l.to_string())
         .collect();
+    let branch = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&dir)
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
     let diff = Command::new("git")
         .args(["diff", "--stat", "--patch"])
         .current_dir(&dir)
@@ -810,6 +842,7 @@ async fn git_diff(cwd: Option<String>) -> Result<GitDiff, String> {
         .unwrap_or_default();
     Ok(GitDiff {
         is_repo: true,
+        branch,
         files,
         diff,
     })
@@ -836,6 +869,39 @@ fn reset_chat(state: State<'_, AppState>, chat_id: String) -> Result<(), String>
     let mut chats = state.chats.lock().map_err(|_| "state lock poisoned")?;
     chats.remove(&chat_id);
     Ok(())
+}
+
+/// Save a pasted/attached image to a temp file and return its absolute path, so
+/// the prompt can reference it for the agent to open (with its own file tools).
+#[tauri::command]
+fn save_paste(name: String, data: Vec<u8>) -> Result<String, String> {
+    let dir = std::env::temp_dir().join("parley-attachments");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create attachments dir: {e}"))?;
+    // Sanitize the name to a safe basename.
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let file = dir.join(format!(
+        "{stamp}-{}",
+        if safe.is_empty() {
+            "paste.png".into()
+        } else {
+            safe
+        }
+    ));
+    std::fs::write(&file, &data).map_err(|e| format!("write attachment: {e}"))?;
+    Ok(file.to_string_lossy().into_owned())
 }
 
 // ---- helpers ---------------------------------------------------------------
@@ -904,6 +970,7 @@ fn fnv1a(s: &str) -> u64 {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(AppState::default());
             Ok(())
@@ -914,7 +981,8 @@ fn main() {
             usage_stats,
             git_diff,
             git_discard,
-            reset_chat
+            reset_chat,
+            save_paste
         ])
         .run(tauri::generate_context!())
         .expect("error while running Parley desktop");

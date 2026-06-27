@@ -25,4 +25,5 @@ export { Alert } from "@cruzjs/ui/components/Alert/Alert";
 export { EmptyState } from "@cruzjs/ui/components/EmptyState/EmptyState";
 export { Combobox } from "@cruzjs/ui/components/Combobox/Combobox";
 export { CommandPalette } from "@cruzjs/ui/components/CommandPalette/CommandPalette";
+export { Collapsible } from "@cruzjs/ui/components/Collapsible/Collapsible";
 export { Modal } from "@cruzjs/ui/components/Modal/Modal";
