@@ -47,6 +47,8 @@ par mcp connect -h cl                                # registers the MCP server 
 
 Parley is a small, dependency-free Rust CLI (binary: `par`). It never calls a model API itself — it drives the agent CLIs you already have, so your auth, models, and permissions stay with them. The MCP server exposes the very same operations as tools, so nothing is locked to one surface.
 
+> **Prefer a window to a terminal?** [**Parley Desktop**](desktop/README.md) is a small Tauri chat app over the same engine — one chat, switch between Auto / Fuse / Solve / any single agent per message, with live-streamed panels. It's a thin shell that drives `par`, so it inherits each agent's own auth, subscription, and caching.
+
 ## Why
 
 **A single agent is a single point of view.** Every coding agent ships one model's training, one model's failure modes, one model's blind spots. On the calls that matter — an architecture decision, a security review, a tricky migration — there's no second opinion, no disagreement to flag risk, no way to combine the model that reasons best with the model that writes the best code.

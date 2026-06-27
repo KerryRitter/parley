@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Parley</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar" data-tauri-drag-region>
+        <div class="brand">
+          <span class="mark">⚖</span>
+          <span class="name">Parley</span>
+        </div>
+        <div class="controls">
+          <div class="seg" id="target-seg" role="tablist" aria-label="Target"></div>
+          <div class="divider"></div>
+          <input
+            id="model"
+            class="model"
+            type="text"
+            spellcheck="false"
+            placeholder="model (optional)"
+            title="Optional model override"
+          />
+          <button id="settings-btn" class="icon-btn" title="Settings">⚙</button>
+        </div>
+      </header>
+
+      <main id="thread" class="thread">
+        <div class="empty" id="empty-state">
+          <div class="empty-mark">⚖</div>
+          <h1>Convene your agents</h1>
+          <p>
+            One chat, every agent. Pick <b>Auto</b> to route to the best one,
+            <b>Fuse</b> to ask a panel and synthesize, <b>Solve</b> to escalate
+            when one gets stuck — or send straight to a single agent.
+          </p>
+          <div class="suggestions" id="suggestions"></div>
+        </div>
+      </main>
+
+      <div id="settings" class="settings hidden">
+        <label>
+          Working directory
+          <input id="cwd" type="text" spellcheck="false" placeholder="$HOME" />
+        </label>
+        <label class="row">
+          <input id="yolo" type="checkbox" checked />
+          <span>Allow agents to act without prompting (yolo)</span>
+        </label>
+        <label>
+          Fuse panel <span class="hint">comma-separated; blank = default trio</span>
+          <input id="panel" type="text" spellcheck="false" placeholder="claude, codex, gemini" />
+        </label>
+        <p class="hint">
+          Agents run via your local CLIs — their auth, subscriptions, and caching.
+          Nothing here uses an API key.
+        </p>
+      </div>
+
+      <footer class="composer">
+        <div class="composer-inner">
+          <textarea
+            id="input"
+            rows="1"
+            placeholder="Message the panel…  (Enter to send · Shift+Enter for newline)"
+          ></textarea>
+          <button id="send" class="send" title="Send (Enter)" disabled>
+            <span class="send-glyph">↑</span>
+          </button>
+        </div>
+        <div class="composer-meta" id="composer-meta"></div>
+      </footer>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

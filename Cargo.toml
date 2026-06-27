@@ -13,3 +13,11 @@ path = "src/main.rs"
 codegen-units = 1
 lto = "thin"
 strip = true
+
+# The `par` CLI/MCP core above stays dependency-free. The desktop app is a
+# separate workspace member with its own (heavier) dependency tree, built only
+# when explicitly targeted (`cargo build -p parley-desktop`), so plain
+# `cargo build` / `cargo test` here keep building the zero-dep core.
+[workspace]
+members = ["desktop/src-tauri"]
+resolver = "2"
