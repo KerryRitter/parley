@@ -288,3 +288,14 @@ body {
 .cz-diff-file { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 12px; border: 0; background: transparent; cursor: pointer; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-secondary); text-align: left; }
 .cz-diff-file:hover { background: rgba(255,255,255,.04); }
 .cz-diff-file-sel { background: var(--color-primary-subtle); color: var(--color-text); }
+
+/* polish: motion, streaming cursor, typing shimmer */
+@keyframes cz-rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.cz-rise { animation: cz-rise-in 0.18s ease; }
+.cz-cursor { display: inline-block; color: var(--color-primary); animation: cz-blink 1s steps(2) infinite; margin-left: 1px; font-weight: 700; }
+@keyframes cz-blink { 50% { opacity: 0; } }
+.cz-typing { display: inline-flex; gap: 4px; align-items: center; vertical-align: middle; }
+.cz-typing i { width: 5px; height: 5px; border-radius: 999px; background: var(--color-text-tertiary); display: inline-block; animation: cz-bounce 1.1s ease-in-out infinite; }
+.cz-typing i:nth-child(2) { animation-delay: .15s; }
+.cz-typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes cz-bounce { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }

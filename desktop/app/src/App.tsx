@@ -38,6 +38,9 @@ function plLabel(agent: string, model?: string | null) { return model && model.t
 function Dot({ agent, size = 8, warm = false }: { agent: string; size?: number; warm?: boolean }) {
   return <span className={warm ? "cz-dot-warm" : ""} style={{ width: size, height: size, borderRadius: 999, background: color(agent), boxShadow: `0 0 8px -1px ${color(agent)}`, display: "inline-block", flexShrink: 0 }} />;
 }
+function Typing() {
+  return <span className="cz-typing"><i /><i /><i /></span>;
+}
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);
   return (
@@ -510,10 +513,11 @@ function RunGroup({ m }: { m: Msg }) {
   if (!m.isFuse) {
     return <div className="pl-4">{main ? <RunBlock p={main} title={label("main", main.agent)} auto={m.target === "auto"} /> : !m.done && <div className="flex items-center gap-2 text-text-muted"><Spinner size="xs" /> {m.status}</div>}</div>;
   }
+  const fusedTitle = `fused${panelPanes.length ? ` · ${panelPanes.length} agents → 1` : ""}`;
   return (
     <div className="pl-4 flex flex-col gap-2">
-      {fused ? <RunBlock p={fused} title="fused" fused />
-        : <div className="cz-run-block" style={{ borderLeftColor: "var(--color-primary)" }}><div className="cz-run-head"><Dot agent="fused" size={8} /><span className="font-semibold" style={{ color: "var(--color-text)" }}>fused</span><div className="flex-1" /><Spinner size="xs" /><span className="text-text-tertiary">synthesizing…</span></div></div>}
+      {fused ? <RunBlock p={fused} title={fusedTitle} fused />
+        : <div className="cz-run-block cz-rise" style={{ borderLeftColor: "var(--color-primary)" }}><div className="cz-run-head"><Dot agent="fused" size={8} /><span className="font-semibold" style={{ color: "var(--color-text)" }}>fused</span><span className="text-text-tertiary">· {panelPanes.length} agents → 1</span><div className="flex-1" /><Typing /><span className="text-text-tertiary">synthesizing</span></div></div>}
       {m.consensus && (m.consensus.agree || m.consensus.clash) && (
         <div className="flex flex-col gap-1">{m.consensus.agree && <ConsensusRow kind="agree" text={m.consensus.agree} />}{m.consensus.clash && <ConsensusRow kind="clash" text={m.consensus.clash} />}</div>
       )}
@@ -537,7 +541,7 @@ function RunGroup({ m }: { m: Msg }) {
 function RunBlock({ p, title, fused = false, auto = false }: { p: Pane; title: string; fused?: boolean; auto?: boolean }) {
   const accent = fused ? "var(--color-primary)" : color(p.agent);
   return (
-    <div className="cz-run-block cz-run-hover" style={{ borderLeftColor: accent, ...(fused ? { background: "linear-gradient(180deg, rgba(240,163,94,.06), transparent 60%)" } : {}) }}>
+    <div className="cz-run-block cz-run-hover cz-rise" style={{ borderLeftColor: accent, ...(fused ? { background: "linear-gradient(180deg, rgba(240,163,94,.06), transparent 60%)" } : {}) }}>
       <div className="cz-run-head">
         <Dot agent={fused ? "fused" : p.agent} size={8} warm={p.warm} />
         <span className="font-semibold" style={{ color: "var(--color-text)" }}>{auto ? `auto → ${display(p.agent)}` : title}</span>
@@ -546,7 +550,10 @@ function RunBlock({ p, title, fused = false, auto = false }: { p: Pane; title: s
         {p.text && <CopyBtn text={p.text} />}
         {p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span><span style={{ color: p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === 0 ? "✓ exit 0" : `✕ exit ${p.code ?? 1}`}</span></> : <Spinner size="xs" />}
       </div>
-      <div className={"cz-run-body" + (fused ? " cz-run-fused" : "")} dangerouslySetInnerHTML={renderText(p.text || (p.done ? "" : "…"))} />
+      <div className={"cz-run-body" + (fused ? " cz-run-fused" : "")}>
+        {p.text ? <span dangerouslySetInnerHTML={renderText(p.text)} /> : (!p.done && <Typing />)}
+        {!p.done && p.text && <span className="cz-cursor">▋</span>}
+      </div>
       {p.cmd && <div className="cz-run-cmd"><span className="flex-1">$ {p.cmd}</span><CopyBtn text={p.cmd} /></div>}
     </div>
   );
