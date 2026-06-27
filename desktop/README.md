@@ -65,9 +65,8 @@ the Tauri backend, which owns all harness/route/fuse/session logic.
 3. **Node ≥ 18** and **Rust**, plus Tauri's system deps
    (Linux: `webkit2gtk-4.1`, `libsoup-3.0` — see
    <https://tauri.app/start/prerequisites/>).
-4. **CruzUI access.** `@cruzjs/ui` resolves from the registry your npm is
-   configured for (the dev machine routes `@cruzjs` → a local Verdaccio). With
-   that registry reachable, `npm install` works as normal.
+4. **CruzUI** — `@cruzjs/ui` installs from **public npm** (the `@cruzjs` scope is
+   pinned to public in `app/.npmrc`); no special registry needed.
 
 ## Run it
 
