@@ -24,22 +24,10 @@
             placeholder="model (optional)"
             title="Optional model override"
           />
+          <button id="cockpit-btn" class="icon-btn" title="Code cockpit (diff)">⌥</button>
           <button id="settings-btn" class="icon-btn" title="Settings">⚙</button>
         </div>
       </header>
-
-      <main id="thread" class="thread">
-        <div class="empty" id="empty-state">
-          <div class="empty-mark">⚖</div>
-          <h1>Convene your agents</h1>
-          <p>
-            One chat, every agent. Pick <b>Auto</b> to route to the best one,
-            <b>Fuse</b> to ask a panel and synthesize, <b>Solve</b> to escalate
-            when one gets stuck — or send straight to a single agent.
-          </p>
-          <div class="suggestions" id="suggestions"></div>
-        </div>
-      </main>
 
       <div id="settings" class="settings hidden">
         <label>
@@ -54,10 +42,40 @@
           Fuse panel <span class="hint">comma-separated; blank = default trio</span>
           <input id="panel" type="text" spellcheck="false" placeholder="claude, codex, gemini" />
         </label>
+        <div id="usage" class="usage"></div>
         <p class="hint">
-          Agents run via your local CLIs — their auth, subscriptions, and caching.
+          Agents run via your local CLIs — their own auth, subscriptions, and prompt
+          caching. <b>Warm</b> means a turn resumed a live session (cache reused).
           Nothing here uses an API key.
         </p>
+      </div>
+
+      <div class="body">
+        <main id="thread" class="thread">
+          <div class="empty" id="empty-state">
+            <div class="empty-mark">⚖</div>
+            <h1>One chat. Every agent.</h1>
+            <p>
+              Pick <b>Auto</b> to route to the best agent, <b>Fuse</b> for a panel
+              that synthesizes one answer, <b>Solve</b> to escalate when one gets
+              stuck — or message a single agent. Type <code>@agent</code> to direct
+              one message; they all share the same conversation underneath.
+            </p>
+            <div class="suggestions" id="suggestions"></div>
+          </div>
+        </main>
+
+        <aside id="cockpit" class="cockpit hidden">
+          <div class="cockpit-head">
+            <span>Working tree</span>
+            <div class="cockpit-actions">
+              <button id="diff-refresh" class="mini">refresh</button>
+              <button id="diff-discard" class="mini danger">discard</button>
+            </div>
+          </div>
+          <div id="diff-files" class="diff-files"></div>
+          <pre id="diff-body" class="diff-body"></pre>
+        </aside>
       </div>
 
       <footer class="composer">
@@ -65,7 +83,7 @@
           <textarea
             id="input"
             rows="1"
-            placeholder="Message the panel…  (Enter to send · Shift+Enter for newline)"
+            placeholder="Message the panel…  (Enter to send · Shift+Enter for newline · @agent to direct)"
           ></textarea>
           <button id="send" class="send" title="Send (Enter)" disabled>
             <span class="send-glyph">↑</span>

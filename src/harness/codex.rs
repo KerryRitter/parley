@@ -1,5 +1,6 @@
 use super::{
-    add_passthrough, add_yolo_args, is_json_output, plain_model, Harness, Invocation, Request,
+    add_passthrough, add_yolo_args, is_json_output, plain_model, resume_is_latest, Harness,
+    Invocation, Request,
 };
 
 pub(crate) fn new() -> Box<dyn Harness> {
@@ -13,6 +14,16 @@ impl Harness for CodexHarness {
         let mut args = Vec::new();
         if request.prompt.is_some() {
             args.push("exec".to_string());
+            // Resume a prior session for warm context: `codex exec resume <id>`,
+            // or `--last` for the most recent recorded session here.
+            if let Some(resume) = &request.resume_id {
+                args.push("resume".to_string());
+                if resume_is_latest(resume) {
+                    args.push("--last".to_string());
+                } else {
+                    args.push(resume.clone());
+                }
+            }
         }
 
         if let Some(model) = plain_model(request) {

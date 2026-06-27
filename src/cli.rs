@@ -18,6 +18,12 @@ pub(crate) struct CliOptions {
     pub passthrough: Vec<String>,
     pub dry_run: bool,
     pub yolo: bool,
+    /// Set a specific session id for this run (where the agent supports it, e.g.
+    /// claude `--session-id`). Lets a caller own the id so it can resume later.
+    pub session_id: Option<String>,
+    /// Continue a prior session headlessly: an id, or `latest`/`last` for the
+    /// most recent in this directory. Maps to each agent's resume flag.
+    pub resume_id: Option<String>,
 }
 
 /// Options for `par resume` — browse and resume sessions across harnesses,
@@ -356,6 +362,8 @@ where
             }
             "--max-turns" => options.max_turns = Some(require_value(&mut args, "--max-turns")?),
             "--agent" => options.agent = Some(require_value(&mut args, "--agent")?),
+            "--session-id" => options.session_id = Some(require_value(&mut args, "--session-id")?),
+            "--resume-id" => options.resume_id = Some(require_value(&mut args, "--resume-id")?),
             _ if arg.starts_with("--prompt=") => {
                 options.prompt = Some(value_after_equals(&arg, "--prompt="));
             }
@@ -385,6 +393,12 @@ where
             }
             _ if arg.starts_with("--agent=") => {
                 options.agent = Some(value_after_equals(&arg, "--agent="));
+            }
+            _ if arg.starts_with("--session-id=") => {
+                options.session_id = Some(value_after_equals(&arg, "--session-id="));
+            }
+            _ if arg.starts_with("--resume-id=") => {
+                options.resume_id = Some(value_after_equals(&arg, "--resume-id="));
             }
             _ if arg.starts_with('-') => options.passthrough.push(arg),
             _ => {
@@ -425,6 +439,9 @@ Options:
   --cwd <path>            Working directory for the target CLI
   --no-yolo               Yolo (permission bypass) is ON by default; this opts out for the run
   --yolo                  Explicitly enable yolo (already the default)
+  --session-id <id>       Set a specific session id (claude); lets you resume it later
+  --resume-id <id|latest> Continue a prior session headlessly for a warm prompt cache
+                          (claude --resume, codex exec resume, gemini --resume; latest=most recent)
   --dry-run               Print the routed command as JSON
   --                      Pass remaining flags through to the target CLI
 

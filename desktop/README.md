@@ -16,18 +16,39 @@ Built with **Tauri** (Rust + native webview) — a ~8 MB app, not a 150 MB one.
 
 ---
 
+## What makes it more than a chat box
+
+One conversation, every agent underneath — and three things a one-shot CLI call
+can't give you:
+
+- **Warm session pinning.** Each agent keeps a *resumed* session per chat
+  (`claude --session-id`/`--resume`, `codex exec resume`, `gemini --resume`), so
+  follow-ups reuse that agent's own warm prompt cache instead of re-sending the
+  whole transcript cold. Turns marked **warm** in the UI did exactly this.
+- **Shared cross-agent memory.** There's one canonical transcript. When a message
+  goes to an agent, it resumes its own warm thread and is fed only the *delta* —
+  what the *other* agents said since it last spoke — so every agent stays in the
+  same conversation without paying to replay all of it. Type `@gemini …`,
+  `@panel …`, or `@auto …` to direct a single message; they all share the thread.
+- **Live fan-out + fusion.** Fuse streams every panelist into its own pane
+  concurrently, then a judge synthesizes — the `par fuse` engine, but live. The
+  judge's CONSENSUS / CONTRADICTIONS are surfaced as a compact strip.
+
+Plus a **code cockpit** (⌥): point at a repo and watch the agents' `git diff`
+live, with a guarded discard. And a **usage panel** (⚙): per-agent calls, time,
+and which sessions are warm.
+
 ## Why it's just a thin shell
 
 The app has no model logic of its own. It drives the [`par`](../README.md)
-binary — Parley's CLI — which owns all the harness/routing/fusion logic. For any
-message it asks `par … --dry-run` for the exact command to run, then spawns that
-and streams the output live into the UI.
+binary — Parley's CLI — which owns all the harness/routing/fusion/session logic.
+For any message it asks `par … --dry-run` (with `--session-id`/`--resume-id` for
+warm continuity) for the exact command to run, then spawns that and streams the
+output live into the UI.
 
 That means the desktop app inherits, for free, everything `par` already does:
 **each agent's own auth, subscription, and prompt caching** — no API keys, your
-code never leaves your machine. Fusion runs every panelist concurrently (each in
-its own pane) and a judge synthesizes the result, exactly like `par fuse`, but
-streamed instead of all-at-once.
+code never leaves your machine.
 
 ```
 ┌─ ⚖ Parley ────────────── Auto · Fuse · Solve · claude · codex … ─┐
@@ -109,12 +130,19 @@ binary at compile time.
 - **Fuse panel** — comma-separated agents for Fuse mode (blank = `claude, codex,
   gemini`).
 
-## Notes & limits (v1)
+## Notes & limits
 
-- Conversation context is replayed as a preamble each turn (capped). True
-  per-agent session pinning (warm prompt cache across turns) is future work —
-  it maps onto `par`'s cross-agent session resume.
+- **Warm pinning** is exact for **claude** (we own the session id via
+  `--session-id`, then `--resume <id>` — correct even with several chats open).
+  **codex**/**gemini** resume the *most recent* session here (`--last` /
+  `latest`), which is correct for a single active chat; other agents fall back to
+  a cold context preamble. The UI badges each turn warm/cold honestly.
 - Output streams at line granularity from each CLI; token-level streaming
   (`--output-format stream-json`) is a future enhancement.
+- Per-agent **token/cost** numbers aren't shown yet (the usage panel reports
+  calls + wall-clock + warm/cold); reading them needs each CLI's JSON usage
+  envelope and is future work.
+- The cockpit shows `git diff` and offers a guarded **discard**
+  (`git checkout -- .`); per-hunk accept/reject is future work.
 - The app is a separate workspace crate with its own dependencies; the core
   `par` CLI stays dependency-free.

@@ -44,6 +44,8 @@ pub(crate) struct Request {
     pub passthrough: Vec<String>,
     pub dry_run: bool,
     pub yolo: bool,
+    pub session_id: Option<String>,
+    pub resume_id: Option<String>,
 }
 
 impl Request {
@@ -64,8 +66,20 @@ impl Request {
             passthrough: options.passthrough,
             dry_run: options.dry_run,
             yolo: options.yolo,
+            session_id: options.session_id,
+            resume_id: options.resume_id,
         })
     }
+}
+
+/// Whether a `--resume-id` value means "the most recent session here" rather
+/// than a specific id. Each adapter maps this to its own flag (`--last` for
+/// codex, `latest` for gemini).
+pub(crate) fn resume_is_latest(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "latest" | "last"
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -719,5 +733,88 @@ mod tests {
 
         assert_eq!(invocation.command, "agy");
         assert_eq!(invocation.args, vec!["review this"]);
+    }
+
+    fn build(options: CliOptions) -> Invocation {
+        let request = Request::from_options(options, String::new()).unwrap();
+        HarnessFactory::default()
+            .create(&request.harness)
+            .unwrap()
+            .build(&request)
+            .unwrap()
+    }
+
+    #[test]
+    fn claude_sets_then_resumes_a_session() {
+        let set = build(CliOptions {
+            harness: "claude".to_string(),
+            prompt: Some("hi".to_string()),
+            session_id: Some("sess-1".to_string()),
+            ..CliOptions::default()
+        });
+        assert!(set
+            .args
+            .windows(2)
+            .any(|w| w == ["--session-id".to_string(), "sess-1".to_string()]));
+
+        let resumed = build(CliOptions {
+            harness: "claude".to_string(),
+            prompt: Some("more".to_string()),
+            // resume wins over session_id when both are present
+            session_id: Some("sess-1".to_string()),
+            resume_id: Some("sess-1".to_string()),
+            ..CliOptions::default()
+        });
+        assert!(resumed
+            .args
+            .windows(2)
+            .any(|w| w == ["--resume".to_string(), "sess-1".to_string()]));
+        assert!(!resumed.args.iter().any(|a| a == "--session-id"));
+    }
+
+    #[test]
+    fn codex_resume_by_id_and_last() {
+        let by_id = build(CliOptions {
+            harness: "codex".to_string(),
+            prompt: Some("go".to_string()),
+            resume_id: Some("uuid-9".to_string()),
+            ..CliOptions::default()
+        });
+        assert_eq!(by_id.args[0], "exec");
+        assert_eq!(by_id.args[1], "resume");
+        assert_eq!(by_id.args[2], "uuid-9");
+
+        let last = build(CliOptions {
+            harness: "codex".to_string(),
+            prompt: Some("go".to_string()),
+            resume_id: Some("latest".to_string()),
+            ..CliOptions::default()
+        });
+        assert_eq!(&last.args[0..3], &["exec", "resume", "--last"]);
+    }
+
+    #[test]
+    fn gemini_resume_latest_and_id() {
+        let latest = build(CliOptions {
+            harness: "gemini".to_string(),
+            prompt: Some("go".to_string()),
+            resume_id: Some("last".to_string()),
+            ..CliOptions::default()
+        });
+        assert!(latest
+            .args
+            .windows(2)
+            .any(|w| w == ["--resume".to_string(), "latest".to_string()]));
+
+        let by_id = build(CliOptions {
+            harness: "gemini".to_string(),
+            prompt: Some("go".to_string()),
+            resume_id: Some("5".to_string()),
+            ..CliOptions::default()
+        });
+        assert!(by_id
+            .args
+            .windows(2)
+            .any(|w| w == ["--resume".to_string(), "5".to_string()]));
     }
 }

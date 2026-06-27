@@ -209,6 +209,13 @@ body {
   margin: 0;
 }
 
+/* ---- body split: thread + cockpit ---- */
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 /* ---- thread ---- */
 .thread {
   flex: 1;
@@ -404,6 +411,15 @@ body {
   color: var(--text);
   font-weight: 600;
 }
+.empty code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--accent);
+}
 .suggestions {
   display: flex;
   flex-wrap: wrap;
@@ -425,6 +441,170 @@ body {
 .suggestions button:hover {
   color: var(--text);
   border-color: var(--accent);
+}
+
+/* ---- warm badge + timings ---- */
+.warm {
+  display: inline-block;
+  background: #2c4a38;
+  color: var(--good);
+  border: 1px solid #2f6b48;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+  letter-spacing: 0.3px;
+}
+.ms {
+  color: var(--faint);
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+/* ---- consensus strip ---- */
+.consensus {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 12px;
+}
+.consensus.hidden {
+  display: none;
+}
+.c-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 11px;
+  background: var(--bg-elev);
+}
+.c-row > span {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.c-agree > span {
+  background: #20402f;
+  color: var(--good);
+}
+.c-clash > span {
+  background: #4a3320;
+  color: var(--accent);
+}
+.c-row > div {
+  color: #cfd3db;
+}
+
+/* ---- cockpit ---- */
+.cockpit {
+  width: 380px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line);
+  background: var(--bg-elev);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.cockpit.hidden {
+  display: none;
+}
+.cockpit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.cockpit-actions {
+  display: flex;
+  gap: 6px;
+}
+.mini {
+  appearance: none;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.mini:hover {
+  color: var(--text);
+}
+.mini.danger:hover {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+.diff-files {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  max-height: 140px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.diff-file {
+  color: #cfd3db;
+  white-space: pre;
+}
+.diff-empty {
+  color: var(--faint);
+  font-style: italic;
+  font-family: var(--sans);
+}
+.diff-body {
+  flex: 1;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 11.8px;
+  line-height: 1.45;
+  color: #b9c0cc;
+  white-space: pre;
+}
+
+/* ---- usage ---- */
+.usage {
+  display: grid;
+  gap: 4px;
+}
+.usage-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--faint);
+  margin-bottom: 2px;
+}
+.usage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.u-agent {
+  flex: 1;
+  color: var(--text);
+}
+.u-calls,
+.u-ms {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- composer ---- */
