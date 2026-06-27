@@ -278,3 +278,8 @@ body {
 .cz-copy { opacity: 0; background: var(--color-surface-lighter); border: 1px solid var(--color-surface-border); color: var(--color-text-muted); border-radius: 5px; padding: 1px 8px; font-family: var(--font-mono); font-size: 10.5px; cursor: pointer; transition: opacity .12s, color .12s; flex-shrink: 0; }
 .cz-run-hover:hover .cz-copy { opacity: 1; }
 .cz-copy:hover { color: var(--color-text); border-color: var(--color-primary); }
+
+/* brand + separator in the tab row */
+.cz-brand { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-sans); font-weight: 660; font-size: 13.5px; padding: 0 4px; user-select: none; }
+.cz-tab-sep { width: 1px; height: 18px; background: var(--color-surface-border); margin: 0 4px; align-self: center; flex-shrink: 0; }
+.cz-tabstrip .cz-pill { height: 24px; align-self: center; }

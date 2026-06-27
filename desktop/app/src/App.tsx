@@ -55,6 +55,7 @@ export function App() {
   const [active, setActive] = useState("c1");
   const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
   const next = useRef(2);
+  const openers = useRef<Record<string, () => void>>({});
 
   const addTab = () => {
     const n = next.current++;
@@ -89,6 +90,9 @@ export function App() {
     <div className="flex flex-col h-screen">
       <div className="cz-tabstrip" data-tauri-drag-region>
         <div className="cz-tabstrip-pad" />
+        <span className="cz-brand"><span style={{ color: "var(--color-primary)" }}>⚖</span> parley</span>
+        <button className="cz-pill" onClick={() => openers.current[active]?.()} title="Open folder (active console)">📂 open</button>
+        <div className="cz-tab-sep" />
         {tabs.map((t) => (
           <div key={t.id} className={"cz-tab" + (t.id === active ? " cz-tab-active" : "")} onClick={() => setActive(t.id)}>
             {busyMap[t.id] ? <span className="cz-tab-dot cz-dot-warm" style={{ background: "var(--color-warning)" }} /> : <span className="cz-tab-dot" style={{ background: "var(--color-text-tertiary)" }} />}
@@ -96,12 +100,12 @@ export function App() {
             {tabs.length > 1 && <span className="cz-tab-x" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}>×</span>}
           </div>
         ))}
-        <button className="cz-tab-add" onClick={addTab} title="New console">+</button>
+        <button className="cz-tab-add" onClick={addTab} title="New console (⌘T)">+</button>
       </div>
       <div className="flex-1 min-h-0 relative">
         {tabs.map((t) => (
           <div key={t.id} style={{ display: t.id === active ? "block" : "none", height: "100%" }}>
-            <Console chatId={t.id} active={t.id === active} onBusy={(b) => setBusyMap((m) => ({ ...m, [t.id]: b }))} onTitle={(title) => setTitle(t.id, title)} />
+            <Console chatId={t.id} active={t.id === active} onBusy={(b) => setBusyMap((m) => ({ ...m, [t.id]: b }))} onTitle={(title) => setTitle(t.id, title)} registerOpen={(fn) => { openers.current[t.id] = fn; }} />
           </div>
         ))}
       </div>
@@ -109,7 +113,7 @@ export function App() {
   );
 }
 
-function Console({ chatId, active, onBusy, onTitle }: { chatId: string; active: boolean; onBusy: (busy: boolean) => void; onTitle: (t: string) => void }) {
+function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: string; active: boolean; onBusy: (busy: boolean) => void; onTitle: (t: string) => void; registerOpen: (fn: () => void) => void }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [primary, setPrimary] = useState("claude");
   const [fuse, setFuse] = useState(false);
@@ -187,6 +191,9 @@ function Console({ chatId, active, onBusy, onTitle }: { chatId: string; active: 
     onTitle(base || "console");
   }, [cwd, onTitle]);
 
+  // expose folder-open to the App tab row
+  useEffect(() => { registerOpen(() => setFolderOpen(true)); }, [registerOpen]);
+
   // console-level keyboard (only the active console responds)
   useEffect(() => {
     if (!active) return;
@@ -254,9 +261,8 @@ function Console({ chatId, active, onBusy, onTitle }: { chatId: string; active: 
   return (
     <div className="flex flex-col h-full">
       {/* topbar */}
-      <header className="flex items-center gap-2.5 px-3 h-11 border-b border-surface-border font-mono text-[12.5px]" style={{ background: "rgba(10,11,13,.8)", backdropFilter: "blur(16px)" }}>
-        <span className="flex items-center gap-1.5 font-semibold" style={{ fontFamily: "var(--font-sans)" }}><span style={{ color: "var(--color-primary)" }}>⚖</span> parley</span>
-        <button className="cz-pill" onClick={() => setFolderOpen(true)} title="Open folder (set working dir)">📂 open</button>
+      <header className="flex items-center gap-2.5 px-3 h-10 border-b border-surface-border font-mono text-[12.5px]" style={{ background: "rgba(10,11,13,.8)", backdropFilter: "blur(16px)" }}>
+        <span className="flex items-center gap-1.5"><Dot agent={primary} size={8} /><span className="text-text-secondary">{cwd ? cwd.replace(/\/+$/, "").split("/").pop() : "no folder"}</span></span>
         <div className="flex-1" />
         <button className="cz-kbd-btn" onClick={() => setPalette(true)} title="Command palette"><Kbd>⌘</Kbd><Kbd>K</Kbd></button>
         <div className="flex items-center gap-1.5"><Switch checked={fuse} onChange={setFuse} size="sm" /><span style={{ color: fuse ? "var(--color-primary)" : "var(--color-text-muted)" }}>fuse</span></div>
