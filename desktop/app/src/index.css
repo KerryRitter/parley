@@ -236,3 +236,23 @@ body {
 .cz-agent-sum { display: flex; align-items: center; gap: 7px; width: 100%; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); }
 
 .cz-cold-tag { font-size: 9px; font-weight: 600; color: var(--color-text-tertiary); background: rgba(255,255,255,.04); border: 1px solid var(--color-surface-border); border-radius: 4px; padding: 0 5px; line-height: 14px; font-family: var(--font-mono); }
+
+/* fuse panel builder */
+.cz-panelist { display: inline-flex; align-items: center; gap: 6px; background: var(--color-surface-light); border: 1px solid var(--color-surface-border); border-radius: 6px; padding: 3px 4px 3px 9px; font-family: var(--font-mono); font-size: 12px; cursor: pointer; }
+.cz-panelist:hover { border-color: var(--color-text-tertiary); }
+.cz-px { color: var(--color-text-tertiary); font-size: 14px; padding: 0 4px; border-radius: 4px; }
+.cz-px:hover { color: var(--color-danger); }
+.cz-add { background: transparent; border: 1px dashed var(--color-surface-border); color: var(--color-text-muted); border-radius: 6px; padding: 3px 10px; font-family: var(--font-mono); font-size: 12px; cursor: pointer; }
+.cz-add:hover { color: var(--color-text); border-color: var(--color-primary); }
+.cz-menu-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-text); text-align: left; }
+.cz-menu-row:hover { background: rgba(255,255,255,.05); }
+
+/* folder explorer */
+.cz-overlay { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.5); backdrop-filter: blur(3px); display: grid; place-items: center; }
+.cz-folder { width: 460px; max-height: 70vh; display: flex; flex-direction: column; background: var(--color-surface); border: 1px solid var(--color-surface-border); border-radius: 12px; box-shadow: 0 24px 60px -16px rgba(0,0,0,.7); overflow: hidden; }
+.cz-folder-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--color-surface-border); }
+.cz-folder-path { padding: 8px 14px; color: var(--color-text-secondary); border-bottom: 1px solid var(--color-surface-border); background: rgba(0,0,0,.2); white-space: nowrap; overflow-x: auto; }
+.cz-folder-list { flex: 1; overflow-y: auto; padding: 4px; }
+.cz-dir { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; font-family: var(--font-mono); font-size: 12.5px; color: var(--color-text); text-align: left; }
+.cz-dir:hover { background: rgba(255,255,255,.05); }
+.cz-folder-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 11px 14px; border-top: 1px solid var(--color-surface-border); }

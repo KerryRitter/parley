@@ -2,38 +2,24 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Collapsible, CommandPalette, Input, Kbd, Popover, ScrollArea, Spinner, Switch } from "./cruz";
 import {
-  invoke,
-  onChatEvent,
-  pickFolder,
-  savePaste,
-  type AgentInfo,
-  type AgentList,
-  type AgentUsage,
-  type ChatEvent,
-  type GitDiff,
-  type SendReq,
+  invoke, listDir, onChatEvent, pickFolder, savePaste,
+  type AgentInfo, type AgentList, type AgentUsage, type ChatEvent, type DirListing, type GitDiff, type Panelist, type SendReq,
 } from "./bridge";
 import { CODE_MAP, DEFAULT_PANEL, NEEDS_PROVIDER, PRESETS, color, display } from "./agents";
 
 const CHAT_ID = "main";
 
-interface Pane {
-  agent: string; text: string; warm: boolean; cmd?: string;
-  done: boolean; code?: number; ms?: number;
-}
+interface Pane { agent: string; text: string; warm: boolean; cmd?: string; done: boolean; code?: number; ms?: number; }
 interface Msg {
   id: string; role: "user" | "assistant"; text?: string;
   target: string; judge?: string; isFuse: boolean;
-  panes: Record<string, Pane>; order: string[];
+  panes: Record<string, Pane>; order: string[]; labels: Record<string, string>;
   status: string; consensus?: { agree?: string; clash?: string }; done: boolean;
 }
 interface Attachment { path: string; name: string; }
 interface Command { key: string; label: string; run: () => void; }
 
-function fmtMs(ms?: number) {
-  if (ms == null) return "";
-  return ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms";
-}
+function fmtMs(ms?: number) { if (ms == null) return ""; return ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms"; }
 function renderText(raw: string) {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const parts = raw.split(/```/);
@@ -49,6 +35,7 @@ function section(text: string, heading: string) {
   const m = text.match(re);
   return m ? m[1].split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 4).join(" · ") : "";
 }
+function plLabel(agent: string, model?: string | null) { return model && model.trim() ? `${display(agent)} · ${model}` : display(agent); }
 function Dot({ agent, size = 8, warm = false }: { agent: string; size?: number; warm?: boolean }) {
   return <span className={warm ? "cz-dot-warm" : ""} style={{ width: size, height: size, borderRadius: 999, background: color(agent), boxShadow: `0 0 8px -1px ${color(agent)}`, display: "inline-block", flexShrink: 0 }} />;
 }
@@ -57,7 +44,7 @@ export function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [primary, setPrimary] = useState("claude");
   const [fuse, setFuse] = useState(false);
-  const [panel, setPanel] = useState<Set<string>>(new Set(DEFAULT_PANEL));
+  const [panel, setPanel] = useState<Panelist[]>(DEFAULT_PANEL.map((a) => ({ id: a, agent: a })));
   const [model, setModel] = useState("");
   const [provider, setProvider] = useState("");
   const [cwd, setCwd] = useState("");
@@ -72,9 +59,11 @@ export function App() {
   const [usage, setUsage] = useState<AgentUsage[]>([]);
   const [palette, setPalette] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
+  const [folderOpen, setFolderOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const seq = useRef(0);
+  const pid = useRef(0);
   const histIdx = useRef(-1);
 
   const usageByAgent = useMemo(() => { const m: Record<string, AgentUsage> = {}; for (const u of usage) m[u.agent] = u; return m; }, [usage]);
@@ -84,7 +73,6 @@ export function App() {
 
   const refreshDiff = useCallback(() => { invoke<GitDiff>("git_diff", { cwd: cwd || null }).then(setDiff).catch(() => setDiff(null)); }, [cwd]);
   const refreshUsage = useCallback(() => { invoke<AgentUsage[]>("usage_stats").then(setUsage).catch(() => setUsage([])); }, []);
-  const openFolder = useCallback(async () => { const f = await pickFolder(); if (f) { setCwd(f); setTimeout(refreshDiff, 0); } }, [refreshDiff]);
 
   useEffect(() => {
     invoke<AgentList>("list_agents").then((list) => {
@@ -100,10 +88,7 @@ export function App() {
       setMessages((prev) => prev.map((m) => {
         if (m.id !== e.msgId) return m;
         const next: Msg = { ...m, panes: { ...m.panes }, order: [...m.order] };
-        const ensure = (key: string) => {
-          if (!next.panes[key]) { next.panes[key] = { agent: e.agent || key, text: "", warm: !!e.warm, done: false }; next.order.push(key); }
-          return next.panes[key];
-        };
+        const ensure = (key: string) => { if (!next.panes[key]) { next.panes[key] = { agent: e.agent || key, text: "", warm: !!e.warm, done: false }; next.order.push(key); } return next.panes[key]; };
         if (e.kind === "start") { const p = ensure(e.pane); next.panes[e.pane] = { ...p, agent: e.agent || p.agent, warm: !!e.warm, cmd: e.cmd }; }
         else if (e.kind === "chunk") { const p = ensure(e.pane); next.panes[e.pane] = { ...p, text: p.text + (e.text || "") }; }
         else if (e.kind === "status") next.status = e.text || "";
@@ -117,15 +102,20 @@ export function App() {
     });
   }, []);
 
+  // panel ops
+  const addPanelist = (agent: string) => setPanel((p) => [...p, { id: "p" + ++pid.current, agent, model: "", provider: "" }]);
+  const removePanelist = (id: string) => setPanel((p) => p.filter((x) => x.id !== id));
+  const patchPanelist = (id: string, patch: Partial<Panelist>) => setPanel((p) => p.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+
   const commands: Command[] = useMemo(() => [
     { key: "fuse", label: (fuse ? "Disable" : "Enable") + " Fuse", run: () => setFuse((v) => !v) },
     { key: "single", label: "Single agent (Fuse off)", run: () => setFuse(false) },
     { key: "clear", label: "Clear run log", run: () => setMessages([]) },
     { key: "cockpit", label: "Toggle code cockpit", run: () => { setCockpit((v) => !v); refreshDiff(); } },
-    { key: "open", label: "Open folder…", run: () => { void openFolder(); } },
+    { key: "open", label: "Open folder…", run: () => setFolderOpen(true) },
     { key: "auto", label: "Primary → Auto (route each message)", run: () => setPrimary("auto") },
     ...agents.filter((a) => a.installed).map((a) => ({ key: a.name, label: `Primary → ${display(a.name)}`, run: () => setPrimary(a.name) })),
-  ], [agents, fuse, openFolder, refreshDiff]);
+  ], [agents, fuse, refreshDiff]);
 
   function parseMention(text: string): { target: string; prompt: string } | null {
     const m = text.match(/^@([a-zA-Z0-9_-]+)\s+([\s\S]+)$/);
@@ -145,18 +135,21 @@ export function App() {
     let prompt = mention ? mention.prompt : raw;
     const fuseOn = mention ? mention.target === "fuse" : fuse;
     const target = fuseOn ? "fuse" : mention ? mention.target : primary;
-    const usePanel = fuseOn ? (panel.size >= 2 ? [...panel] : DEFAULT_PANEL.slice()) : [];
+    const usePanel: Panelist[] = fuseOn ? (panel.length >= 2 ? panel : DEFAULT_PANEL.map((a) => ({ id: a, agent: a }))) : [];
     if (attachments.length) prompt = attachments.map((a) => `[Attached image: ${a.path}]`).join("\n") + "\n" + prompt;
+
+    const labels: Record<string, string> = {};
+    if (fuseOn) usePanel.forEach((p) => (labels[p.id] = plLabel(p.agent, p.model)));
+    else labels["main"] = target === "auto" ? "" : plLabel(target, model);
 
     if (raw) setHistory((h) => [...h, raw]);
     histIdx.current = -1;
     const id = `m${Date.now()}-${seq.current++}`;
-    setInput("");
-    setAttachments([]);
+    setInput(""); setAttachments([]);
     setMessages((prev) => [
       ...prev,
-      { id: id + "-u", role: "user", text: raw || "(image)", target, isFuse: false, panes: {}, order: [], status: "", done: true },
-      { id, role: "assistant", target, judge: fuseOn ? judge : undefined, isFuse: fuseOn, panes: {}, order: [], status: "running…", done: false },
+      { id: id + "-u", role: "user", text: raw || "(image)", target, isFuse: false, panes: {}, order: [], labels: {}, status: "", done: true },
+      { id, role: "assistant", target, judge: fuseOn ? judge : undefined, isFuse: fuseOn, panes: {}, order: [], labels, status: "running…", done: false },
     ]);
     setBusy(true);
     requestAnimationFrame(() => { const el = logRef.current; if (el) el.scrollTop = el.scrollHeight; });
@@ -167,24 +160,20 @@ export function App() {
     finally { setBusy(false); setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, done: true } : m))); refreshUsage(); refreshDiff(); }
   }
 
-  const paletteItems = commands.map((c) => ({ id: c.key, group: c.key === "fuse" || c.key === "single" || c.key === "clear" || c.key === "cockpit" || c.key === "open" ? "Actions" : "Primary agent", label: c.label, onSelect: c.run }));
+  const paletteItems = commands.map((c) => ({ id: c.key, group: ["fuse", "single", "clear", "cockpit", "open"].includes(c.key) ? "Actions" : "Primary agent", label: c.label, onSelect: c.run }));
 
   return (
     <div className="flex flex-col h-screen">
       {/* topbar */}
       <header className="flex items-center gap-2.5 px-3 h-11 border-b border-surface-border font-mono text-[12.5px]" style={{ paddingLeft: 84, background: "rgba(10,11,13,.8)", backdropFilter: "blur(16px)" }} data-tauri-drag-region>
-        <span className="flex items-center gap-1.5 font-semibold" style={{ fontFamily: "var(--font-sans)" }}>
-          <span style={{ color: "var(--color-primary)" }}>⚖</span> parley
-        </span>
-        <button className="cz-pill" onClick={openFolder} title="Open folder (set working dir)">📂 open</button>
+        <span className="flex items-center gap-1.5 font-semibold" style={{ fontFamily: "var(--font-sans)" }}><span style={{ color: "var(--color-primary)" }}>⚖</span> parley</span>
+        <button className="cz-pill" onClick={() => setFolderOpen(true)} title="Open folder (set working dir)">📂 open</button>
         <div className="flex-1" />
         <button className="cz-kbd-btn" onClick={() => setPalette(true)} title="Command palette"><Kbd>⌘</Kbd><Kbd>K</Kbd></button>
-        <div className="flex items-center gap-1.5">
-          <Switch checked={fuse} onChange={setFuse} size="sm" />
-          <span style={{ color: fuse ? "var(--color-primary)" : "var(--color-text-muted)" }}>fuse</span>
-        </div>
+        <div className="flex items-center gap-1.5"><Switch checked={fuse} onChange={setFuse} size="sm" /><span style={{ color: fuse ? "var(--color-primary)" : "var(--color-text-muted)" }}>fuse</span></div>
         <Popover placement="bottom-end" trigger={<button className="cz-pill" data-set={model ? "1" : "0"}>{model ? (provider ? `${provider}/${model}` : model) : "model"}</button>}>
           <div className="p-3 grid gap-3" style={{ minWidth: 250 }}>
+            <div className="text-[11px] text-text-tertiary font-mono">primary {display(primary)}</div>
             {NEEDS_PROVIDER.has(primary) && <Input label="Provider" size="sm" value={provider} placeholder="anthropic" onChange={(e: React.ChangeEvent<HTMLInputElement>) => setProvider(e.target.value)} />}
             <Input label="Model" size="sm" value={model} placeholder="default" onChange={(e: React.ChangeEvent<HTMLInputElement>) => setModel(e.target.value)} />
             {(PRESETS[primary] || []).length > 0 && <div className="flex flex-wrap gap-1.5">{(PRESETS[primary] || []).map((mm) => <button key={mm} className="cz-preset" onClick={() => setModel(mm)}>{mm}</button>)}</div>}
@@ -192,12 +181,8 @@ export function App() {
         </Popover>
         <Popover placement="bottom-end" trigger={<button className="cz-icon" title="Settings">⚙</button>}>
           <div className="p-3 grid gap-3" style={{ minWidth: 280 }}>
-            <div className="grid gap-1">
-              <span className="text-[11px] uppercase tracking-wide text-text-tertiary">Working directory</span>
-              <div className="flex gap-1.5">
-                <Input size="sm" value={cwd} placeholder="$HOME" onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCwd(e.target.value)} />
-                <button className="cz-mini" onClick={openFolder}>browse</button>
-              </div>
+            <div className="grid gap-1"><span className="text-[11px] uppercase tracking-wide text-text-tertiary">Working directory</span>
+              <div className="flex gap-1.5"><Input size="sm" value={cwd} placeholder="$HOME" onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCwd(e.target.value)} /><button className="cz-mini" onClick={() => setFolderOpen(true)}>browse</button></div>
             </div>
             <div className="flex items-center gap-2"><Switch checked={yolo} onChange={setYolo} size="sm" /><span className="text-xs text-text-secondary">yolo — act without prompting</span></div>
           </div>
@@ -205,28 +190,20 @@ export function App() {
         <button className={"cz-icon" + (cockpit ? " cz-icon-on" : "")} title="Code cockpit" onClick={() => { setCockpit((v) => !v); if (!cockpit) refreshDiff(); }}>{"</>"}</button>
       </header>
 
+      {/* fuse panel builder bar */}
+      {fuse && <FusePanelBar panel={panel} agents={agents} judge={judge} onAdd={addPanelist} onRemove={removePanelist} onPatch={patchPanelist} />}
+
       <div className="flex flex-1 min-h-0">
-        {/* slim agents rail */}
+        {/* slim agents rail (primary picker) */}
         <aside className="flex flex-col border-r border-surface-border" style={{ width: railOpen ? 158 : 46, flexShrink: 0, background: "rgba(255,255,255,.012)", transition: "width .12s" }}>
           <div className="flex items-center justify-between h-8 px-2 text-[10px] uppercase tracking-[0.12em] text-text-tertiary font-mono">
-            {railOpen && <span>Agents</span>}
+            {railOpen && <span>Primary</span>}
             <button className="cz-mini" style={{ padding: "1px 6px" }} onClick={() => setRailOpen((v) => !v)} title="Collapse">{railOpen ? "‹" : "›"}</button>
           </div>
           <div className="overflow-y-auto flex-1 px-1.5">
             <RailRow name="auto" active={primary === "auto"} installed open={railOpen} onClick={() => setPrimary("auto")} usage={undefined} />
             {agents.map((a) => <RailRow key={a.name} name={a.name} active={primary === a.name} installed={a.installed} open={railOpen} onClick={() => a.installed && setPrimary(a.name)} usage={usageByAgent[a.name]} />)}
           </div>
-          {fuse && railOpen && (
-            <div className="border-t border-surface-border p-2">
-              <div className="text-[10px] uppercase tracking-[0.1em] text-text-tertiary font-mono mb-1.5 px-1">Panel · judge {display(judge)}</div>
-              <div className="flex flex-wrap gap-1 px-1">
-                {[...DEFAULT_PANEL, ...agents.map((a) => a.name).filter((n) => !DEFAULT_PANEL.includes(n))].map((n) => {
-                  const inst = agents.find((a) => a.name === n)?.installed ?? true;
-                  return <button key={n} className="cz-chip" data-on={panel.has(n) ? "1" : "0"} disabled={!inst} onClick={() => setPanel((p) => { const x = new Set(p); x.has(n) ? x.delete(n) : x.add(n); return x; })}><Dot agent={n} size={6} />{display(n)}</button>;
-                })}
-              </div>
-            </div>
-          )}
         </aside>
 
         {/* run log + composer */}
@@ -238,13 +215,8 @@ export function App() {
               </div>
             )}
           </div>
-
-          <Composer
-            input={input} setInput={setInput} run={run} busy={busy} fuse={fuse} primary={primary}
-            attachments={attachments} setAttachments={setAttachments}
-            commands={commands} history={history} histIdx={histIdx} inputRef={inputRef}
-            mentionHint={(() => { const m = parseMention(input.trim()); return m ? (m.target === "fuse" ? "panel" : display(m.target)) : ""; })()}
-          />
+          <Composer input={input} setInput={setInput} run={run} busy={busy} fuse={fuse} primary={primary} attachments={attachments} setAttachments={setAttachments} commands={commands} history={history} histIdx={histIdx} inputRef={inputRef}
+            mentionHint={(() => { const m = parseMention(input.trim()); return m ? (m.target === "fuse" ? "panel" : display(m.target)) : ""; })()} />
         </main>
 
         {cockpit && <Cockpit diff={diff} onRefresh={refreshDiff} onClose={() => setCockpit(false)} />}
@@ -252,52 +224,111 @@ export function App() {
 
       {/* status bar */}
       <footer className="flex items-center gap-3 h-7 px-3 border-t border-surface-border font-mono text-[11px] text-text-muted" style={{ background: "rgba(255,255,255,.02)" }}>
-        <button className="hover:text-text" style={{ color: "var(--color-text-secondary)" }} onClick={openFolder} title="Open folder">{cwd || "~"}</button>
+        <button className="hover:text-text" style={{ color: "var(--color-text-secondary)" }} onClick={() => setFolderOpen(true)} title="Open folder">{cwd || "~"}</button>
         {diff?.isRepo && <span>⎇ {diff.branch || "—"}{diff.files.length ? <span style={{ color: "var(--color-warning)" }}>*{diff.files.length}</span> : ""}</span>}
         <div className="flex-1" />
         <span className="flex items-center gap-1"><Dot agent={primary} size={7} />{display(primary)}</span>
-        <span style={{ color: fuse ? "var(--color-primary)" : undefined }}>fuse:{fuse ? "on" : "off"}</span>
+        <span style={{ color: fuse ? "var(--color-primary)" : undefined }}>fuse:{fuse ? `on·${panel.length}` : "off"}</span>
         {model && <span>{provider ? provider + "/" : ""}{model}</span>}
         <span>{installedCount} ready</span>
         <span className="tabular-nums">{totals.calls} runs · {fmtMs(totals.ms)}</span>
       </footer>
 
       <CommandPalette open={palette} onOpenChange={setPalette} items={paletteItems} placeholder="Run a command…" />
+      {folderOpen && <FolderModal initial={cwd} onClose={() => setFolderOpen(false)} onPick={(p) => { setCwd(p); setFolderOpen(false); setTimeout(refreshDiff, 0); }} onNative={async () => { const f = await pickFolder(); if (f) { setCwd(f); setFolderOpen(false); setTimeout(refreshDiff, 0); } }} />}
     </div>
   );
 }
 
-// ---- composer (slash autocomplete · paste images · history) ----------------
+// ---- fuse panel builder ----------------------------------------------------
+
+function FusePanelBar({ panel, agents, judge, onAdd, onRemove, onPatch }: {
+  panel: Panelist[]; agents: AgentInfo[]; judge: string;
+  onAdd: (a: string) => void; onRemove: (id: string) => void; onPatch: (id: string, p: Partial<Panelist>) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-4 py-2 border-b border-surface-border font-mono text-[12px]" style={{ background: "linear-gradient(180deg, rgba(240,163,94,.08), transparent)" }}>
+      <span className="text-[10px] uppercase tracking-wider font-bold" style={{ color: "var(--color-primary)" }}>Panel</span>
+      <div className="flex items-center gap-1.5 flex-wrap flex-1">
+        {panel.map((p) => (
+          <Popover key={p.id} placement="bottom-start" trigger={
+            <button className="cz-panelist"><Dot agent={p.agent} size={7} /><span className="text-text">{display(p.agent)}</span>{p.model ? <span className="text-text-tertiary">· {p.model}</span> : <span className="text-text-tertiary">· default</span>}<span className="cz-px" onClick={(e) => { e.stopPropagation(); onRemove(p.id); }}>×</span></button>
+          }>
+            <div className="p-3 grid gap-2.5" style={{ minWidth: 240 }}>
+              <div className="text-[11px] text-text-tertiary font-mono">{display(p.agent)} instance</div>
+              {NEEDS_PROVIDER.has(p.agent) && <Input label="Provider" size="sm" value={p.provider || ""} placeholder="anthropic" onChange={(e: React.ChangeEvent<HTMLInputElement>) => onPatch(p.id, { provider: e.target.value })} />}
+              <Input label="Model" size="sm" value={p.model || ""} placeholder="default" onChange={(e: React.ChangeEvent<HTMLInputElement>) => onPatch(p.id, { model: e.target.value })} />
+              {(PRESETS[p.agent] || []).length > 0 && <div className="flex flex-wrap gap-1.5">{(PRESETS[p.agent] || []).map((mm) => <button key={mm} className="cz-preset" onClick={() => onPatch(p.id, { model: mm })}>{mm}</button>)}</div>}
+            </div>
+          </Popover>
+        ))}
+        <Popover placement="bottom-start" trigger={<button className="cz-add">+ add</button>}>
+          <div className="p-1.5 grid gap-0.5" style={{ minWidth: 170 }}>
+            {agents.filter((a) => a.installed).map((a) => (
+              <button key={a.name} className="cz-menu-row" onClick={() => onAdd(a.name)}><Dot agent={a.name} size={7} />{display(a.name)}</button>
+            ))}
+          </div>
+        </Popover>
+      </div>
+      <span className="text-text-muted">judged by <b className="text-text">{display(judge)}</b></span>
+    </div>
+  );
+}
+
+// ---- folder explorer -------------------------------------------------------
+
+function FolderModal({ initial, onClose, onPick, onNative }: { initial: string; onClose: () => void; onPick: (p: string) => void; onNative: () => void }) {
+  const [listing, setListing] = useState<DirListing | null>(null);
+  const [loading, setLoading] = useState(true);
+  const go = useCallback((path: string | null) => { setLoading(true); listDir(path).then((l) => { setListing(l); setLoading(false); }).catch(() => setLoading(false)); }, []);
+  useEffect(() => { go(initial || null); }, [go, initial]);
+
+  return (
+    <div className="cz-overlay" onClick={onClose}>
+      <div className="cz-folder" onClick={(e) => e.stopPropagation()}>
+        <div className="cz-folder-head">
+          <span className="font-mono text-[12px]">📂 open folder</span>
+          <button className="cz-mini" onClick={onNative}>native picker</button>
+        </div>
+        <div className="cz-folder-path font-mono text-[12px]">{listing?.path || "…"}</div>
+        <div className="cz-folder-list">
+          {loading ? <div className="p-3 text-text-muted"><Spinner size="xs" /> loading…</div> : (
+            <>
+              {listing?.parent != null && <button className="cz-dir" onClick={() => go(listing.parent)}><span className="text-text-tertiary">↰</span> ..</button>}
+              {(listing?.dirs || []).map((d) => <button key={d.path} className="cz-dir" onClick={() => go(d.path)}><span style={{ color: "var(--color-primary)" }}></span> {d.name}</button>)}
+              {listing && listing.dirs.length === 0 && <div className="p-3 text-text-tertiary italic">no sub-folders</div>}
+            </>
+          )}
+        </div>
+        <div className="cz-folder-foot">
+          <button className="cz-mini" onClick={onClose}>cancel</button>
+          <button className="cz-run" disabled={!listing} onClick={() => listing && onPick(listing.path)}>use this folder</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- composer --------------------------------------------------------------
 
 function Composer(props: {
   input: string; setInput: (v: string) => void; run: () => void; busy: boolean; fuse: boolean; primary: string;
   attachments: Attachment[]; setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
-  commands: Command[]; history: string[]; histIdx: React.MutableRefObject<number>;
-  inputRef: React.RefObject<HTMLTextAreaElement>; mentionHint: string;
+  commands: Command[]; history: string[]; histIdx: React.MutableRefObject<number>; inputRef: React.RefObject<HTMLTextAreaElement>; mentionHint: string;
 }) {
   const { input, setInput, run, busy, fuse, primary, attachments, setAttachments, commands, history, histIdx, inputRef } = props;
   const [sel, setSel] = useState(0);
-
   const slash = input.startsWith("/");
   const query = slash ? input.slice(1).toLowerCase().trim() : "";
   const matches = slash ? commands.filter((c) => c.key.startsWith(query) || c.label.toLowerCase().includes(query)) : [];
   useEffect(() => { setSel(0); }, [input]);
-
   function grow(t: HTMLTextAreaElement) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 180) + "px"; }
-
   async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const imgs = Array.from(e.clipboardData.items).filter((i) => i.type.startsWith("image/"));
     if (!imgs.length) return;
     e.preventDefault();
-    for (const it of imgs) {
-      const file = it.getAsFile();
-      if (!file) continue;
-      const buf = new Uint8Array(await file.arrayBuffer());
-      const name = file.name || `paste-${Date.now()}.png`;
-      try { const path = await savePaste(name, buf); setAttachments((a) => [...a, { path, name }]); } catch { /* ignore */ }
-    }
+    for (const it of imgs) { const file = it.getAsFile(); if (!file) continue; const buf = new Uint8Array(await file.arrayBuffer()); const name = file.name || `paste-${Date.now()}.png`; try { const path = await savePaste(name, buf); setAttachments((a) => [...a, { path, name }]); } catch { /* ignore */ } }
   }
-
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (slash && matches.length) {
       if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => (s + 1) % matches.length); return; }
@@ -306,62 +337,40 @@ function Composer(props: {
       if (e.key === "Escape") { e.preventDefault(); setInput(""); return; }
     }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); return; }
-    if ((e.key === "ArrowUp") && history.length && (input === "" || histIdx.current >= 0)) {
-      e.preventDefault(); histIdx.current = Math.min(histIdx.current + 1, history.length - 1); setInput(history[history.length - 1 - histIdx.current]); return;
-    }
-    if (e.key === "ArrowDown" && histIdx.current >= 0) {
-      e.preventDefault(); histIdx.current -= 1; setInput(histIdx.current < 0 ? "" : history[history.length - 1 - histIdx.current]); return;
-    }
+    if (e.key === "ArrowUp" && history.length && (input === "" || histIdx.current >= 0)) { e.preventDefault(); histIdx.current = Math.min(histIdx.current + 1, history.length - 1); setInput(history[history.length - 1 - histIdx.current]); return; }
+    if (e.key === "ArrowDown" && histIdx.current >= 0) { e.preventDefault(); histIdx.current -= 1; setInput(histIdx.current < 0 ? "" : history[history.length - 1 - histIdx.current]); return; }
   }
-
   return (
     <div className="border-t border-surface-border px-4 py-3 relative" style={{ background: "rgba(10,11,13,.6)" }}>
-      {/* slash autocomplete */}
       {slash && matches.length > 0 && (
         <div className="cz-slash">
           {matches.slice(0, 8).map((c, i) => (
             <button key={c.key} className={"cz-slash-item" + (i === sel ? " cz-slash-sel" : "")} onMouseEnter={() => setSel(i)} onClick={() => { c.run(); setInput(""); inputRef.current?.focus(); }}>
-              <span className="text-text-tertiary">/{c.key}</span>
-              <span className="text-text-secondary">{c.label}</span>
+              <span className="text-text-tertiary">/{c.key}</span><span className="text-text-secondary">{c.label}</span>
             </button>
           ))}
         </div>
       )}
-
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2 max-w-[1100px]">
-          {attachments.map((a, i) => (
-            <span key={i} className="cz-attach">🖼 {a.name}<button onClick={() => setAttachments((x) => x.filter((_, j) => j !== i))}>×</button></span>
-          ))}
+          {attachments.map((a, i) => <span key={i} className="cz-attach">🖼 {a.name}<button onClick={() => setAttachments((x) => x.filter((_, j) => j !== i))}>×</button></span>)}
         </div>
       )}
-
       <div className="cz-term">
         <span className="cz-caret" style={{ color: busy ? "var(--color-warning)" : slash ? "var(--color-info)" : "var(--color-primary)" }}>{slash ? "/" : "❯"}</span>
-        <textarea
-          ref={inputRef} rows={1} value={input}
-          placeholder={fuse ? "message the panel…   @agent · /command · paste an image" : `message ${display(primary)}…   @agent · /command · paste an image`}
-          onChange={(e) => { setInput(e.target.value); grow(e.target); }}
-          onKeyDown={onKeyDown} onPaste={onPaste}
-        />
+        <textarea ref={inputRef} rows={1} value={input} placeholder={fuse ? "message the panel…   @agent · /command · paste an image" : `message ${display(primary)}…   @agent · /command · paste an image`} onChange={(e) => { setInput(e.target.value); grow(e.target); }} onKeyDown={onKeyDown} onPaste={onPaste} />
         <button className="cz-run" disabled={busy || (!input.trim() && attachments.length === 0)} onClick={run}>{busy ? <Spinner size="xs" /> : <><span>run</span><Kbd>⏎</Kbd></>}</button>
       </div>
-      <div className="text-[11px] text-text-tertiary mt-1.5 h-3 font-mono">
-        {props.mentionHint ? <>→ <span style={{ color: "var(--color-primary)" }}>{props.mentionHint}</span></> : slash ? "command — ↑↓ select · ⏎ run" : ""}
-      </div>
+      <div className="text-[11px] text-text-tertiary mt-1.5 h-3 font-mono">{props.mentionHint ? <>→ <span style={{ color: "var(--color-primary)" }}>{props.mentionHint}</span></> : slash ? "command — ↑↓ select · ⏎ run" : ""}</div>
     </div>
   );
 }
-
-// ---- rail ------------------------------------------------------------------
 
 function RailRow({ name, active, installed, open, onClick, usage }: { name: string; active: boolean; installed: boolean; open: boolean; onClick: () => void; usage?: AgentUsage }) {
   return (
     <button className={"cz-rail-row" + (active ? " cz-rail-active" : "")} onClick={onClick} disabled={!installed} title={installed ? name : name + " (not installed)"} style={{ justifyContent: open ? "flex-start" : "center" }}>
       <Dot agent={name} size={8} warm={!!usage?.warm} />
-      {open && <><span className="flex-1 text-left truncate" style={{ opacity: installed ? 1 : 0.4 }}>{display(name)}</span>
-        {usage?.warm && <span className="cz-warm-tag">warm</span>}
-        {usage && usage.calls > 0 && <span className="text-text-tertiary tabular-nums">{usage.calls}</span>}</>}
+      {open && <><span className="flex-1 text-left truncate" style={{ opacity: installed ? 1 : 0.4 }}>{display(name)}</span>{usage?.warm && <span className="cz-warm-tag">warm</span>}{usage && usage.calls > 0 && <span className="text-text-tertiary tabular-nums">{usage.calls}</span>}</>}
     </button>
   );
 }
@@ -370,83 +379,58 @@ function PromptLine({ text }: { text: string }) {
   return <div className="flex gap-2 items-start pt-1"><span style={{ color: "var(--color-primary)" }}>❯</span><span className="whitespace-pre-wrap text-text">{text}</span></div>;
 }
 
-// ---- run rendering ---------------------------------------------------------
-
 function RunGroup({ m }: { m: Msg }) {
-  const panelPanes = m.order.filter((k) => k !== "fused" && k !== "main").map((k) => m.panes[k]);
+  const panelPanes = m.order.filter((k) => k !== "fused" && k !== "main").map((k) => k);
   const fused = m.panes["fused"];
   const main = m.panes["main"];
+  const label = (key: string, agent: string) => m.labels[key] || display(agent);
 
   if (!m.isFuse) {
-    return (
-      <div className="pl-4">
-        {main ? <RunBlock p={main} primary auto={m.target === "auto"} />
-          : !m.done && <div className="flex items-center gap-2 text-text-muted"><Spinner size="xs" /> {m.status}</div>}
-      </div>
-    );
+    return <div className="pl-4">{main ? <RunBlock p={main} title={label("main", main.agent)} auto={m.target === "auto"} /> : !m.done && <div className="flex items-center gap-2 text-text-muted"><Spinner size="xs" /> {m.status}</div>}</div>;
   }
-
-  // fuse: fused answer primary, agents coupled underneath (collapsible)
   return (
     <div className="pl-4 flex flex-col gap-2">
-      {fused ? <RunBlock p={fused} fused />
-        : <div className="cz-run-block" style={{ borderLeftColor: "var(--color-primary)" }}>
-            <div className="cz-run-head"><Dot agent="fused" size={8} /><span className="font-semibold" style={{ color: "var(--color-text)" }}>fused</span><div className="flex-1" /><Spinner size="xs" /><span className="text-text-tertiary">synthesizing…</span></div>
-          </div>}
-
+      {fused ? <RunBlock p={fused} title="fused" fused />
+        : <div className="cz-run-block" style={{ borderLeftColor: "var(--color-primary)" }}><div className="cz-run-head"><Dot agent="fused" size={8} /><span className="font-semibold" style={{ color: "var(--color-text)" }}>fused</span><div className="flex-1" /><Spinner size="xs" /><span className="text-text-tertiary">synthesizing…</span></div></div>}
       {m.consensus && (m.consensus.agree || m.consensus.clash) && (
-        <div className="flex flex-col gap-1">
-          {m.consensus.agree && <ConsensusRow kind="agree" text={m.consensus.agree} />}
-          {m.consensus.clash && <ConsensusRow kind="clash" text={m.consensus.clash} />}
-        </div>
+        <div className="flex flex-col gap-1">{m.consensus.agree && <ConsensusRow kind="agree" text={m.consensus.agree} />}{m.consensus.clash && <ConsensusRow kind="clash" text={m.consensus.clash} />}</div>
       )}
-
       {panelPanes.length > 0 && (
         <div className="cz-panel-wrap">
           <div className="cz-panel-head">▾ panel · {panelPanes.length} agents</div>
-          {panelPanes.map((p) => (
-            <Collapsible
-              key={p.agent}
-              defaultOpen={false}
-              trigger={
-                <div className="cz-agent-sum">
-                  <Dot agent={p.agent} size={7} warm={p.warm} />
-                  <span className="font-semibold" style={{ color: "var(--color-text)" }}>{display(p.agent)}</span>
-                  {p.warm && <span className="cz-warm-tag">warm</span>}
-                  <div className="flex-1" />
-                  {p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span><span style={{ color: p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === 0 ? "✓" : "✕"}</span></> : <Spinner size="xs" />}
-                </div>
-              }
-            >
-              <div className="cz-run-body" style={{ fontFamily: "var(--font-sans)" }} dangerouslySetInnerHTML={renderText(p.text || "…")} />
+          {panelPanes.map((key) => { const p = m.panes[key]; return (
+            <Collapsible key={key} defaultOpen={false} trigger={
+              <div className="cz-agent-sum"><Dot agent={p.agent} size={7} warm={p.warm} /><span className="font-semibold" style={{ color: "var(--color-text)" }}>{label(key, p.agent)}</span>{p.warm && <span className="cz-warm-tag">warm</span>}<div className="flex-1" />{p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span><span style={{ color: p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === 0 ? "✓" : "✕"}</span></> : <Spinner size="xs" />}</div>
+            }>
+              <div className="cz-run-body" dangerouslySetInnerHTML={renderText(p.text || "…")} />
               {p.cmd && <div className="cz-run-cmd">$ {p.cmd}</div>}
             </Collapsible>
-          ))}
+          ); })}
         </div>
       )}
     </div>
   );
 }
 
-function RunBlock({ p, fused = false, primary = false, auto = false }: { p: Pane; fused?: boolean; primary?: boolean; auto?: boolean }) {
+function RunBlock({ p, title, fused = false, auto = false }: { p: Pane; title: string; fused?: boolean; auto?: boolean }) {
   const accent = fused ? "var(--color-primary)" : color(p.agent);
   return (
     <div className="cz-run-block" style={{ borderLeftColor: accent, ...(fused ? { background: "linear-gradient(180deg, rgba(240,163,94,.06), transparent 60%)" } : {}) }}>
       <div className="cz-run-head">
         <Dot agent={fused ? "fused" : p.agent} size={8} warm={p.warm} />
-        <span className="font-semibold" style={{ color: "var(--color-text)" }}>{fused ? "fused" : auto ? `auto → ${display(p.agent)}` : display(p.agent)}</span>
+        <span className="font-semibold" style={{ color: "var(--color-text)" }}>{auto ? `auto → ${display(p.agent)}` : title}</span>
         {p.warm ? <span className="cz-warm-tag">warm · resumed</span> : (!fused && <span className="cz-cold-tag">new session</span>)}
         <div className="flex-1" />
         {p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span><span style={{ color: p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === 0 ? "✓ exit 0" : `✕ exit ${p.code ?? 1}`}</span></> : <Spinner size="xs" />}
       </div>
-      <div className={"cz-run-body" + (fused ? " cz-run-fused" : "")} style={{ fontFamily: "var(--font-sans)" }} dangerouslySetInnerHTML={renderText(p.text || (p.done ? "" : "…"))} />
+      <div className={"cz-run-body" + (fused ? " cz-run-fused" : "")} dangerouslySetInnerHTML={renderText(p.text || (p.done ? "" : "…"))} />
       {p.cmd && <div className="cz-run-cmd">$ {p.cmd}</div>}
     </div>
   );
 }
 
 function ConsensusRow({ kind, text }: { kind: "agree" | "clash"; text: string }) {
-  return <div className="flex gap-2.5 items-start text-[13px] px-2.5 py-1.5 rounded" style={{ background: "var(--color-surface)", border: "1px solid var(--color-surface-border)", fontFamily: "var(--font-sans)" }}><Badge color={kind === "agree" ? "success" : "warning"} variant="subtle" size="sm">{kind}</Badge><span style={{ color: "#d3d7df" }}>{text}</span></div>;
+  return <div className="flex gap-2.5 items-start text-[13px] px-2.5 py-1.5 rounded" style={{ background: "var(--color-surface)", border: "1px solid var(--color-surface-border)", fontFamily: "var(--font-mono)" }}><Badge color={kind === "agree" ? "success" : "warning"} variant="subtle" size="sm">{kind}</Badge><span style={{ color: "#d3d7df" }}>{text}</span></div>;
 }
 
 function Empty({ primary, fuse }: { primary: string; fuse: boolean }) {
@@ -454,8 +438,8 @@ function Empty({ primary, fuse }: { primary: string; fuse: boolean }) {
     <div className="text-text-tertiary text-[12.5px] leading-relaxed pt-2">
       <div style={{ color: "var(--color-primary)" }}># parley — multi-agent dev console</div>
       <div className="mt-1">› primary: <span className="text-text-secondary">{display(primary)}</span>   fuse: <span className="text-text-secondary">{fuse ? "on" : "off"}</span>   (sessions resume warm — prompt cache reused)</div>
-      <div>› <span className="text-text-secondary">📂 open</span> a folder · pick an agent in the rail · <span className="text-text-secondary">@agent</span> to direct · <span className="text-text-secondary">/</span> for commands · paste images</div>
-      <div>› <Kbd>⌘</Kbd><Kbd>K</Kbd> palette · type below and <Kbd>⏎</Kbd> to run · <Kbd>↑</Kbd> recalls history</div>
+      <div>› <span className="text-text-secondary">📂 open</span> a folder · pick a primary in the rail · toggle <span className="text-text-secondary">fuse</span> &amp; build a panel (add the same agent twice at different models)</div>
+      <div>› <span className="text-text-secondary">@agent</span> to direct · <span className="text-text-secondary">/</span> commands · paste images · <Kbd>⌘</Kbd><Kbd>K</Kbd> palette · <Kbd>↑</Kbd> history</div>
     </div>
   );
 }
@@ -463,14 +447,9 @@ function Empty({ primary, fuse }: { primary: string; fuse: boolean }) {
 function Cockpit({ diff, onRefresh, onClose }: { diff: GitDiff | null; onRefresh: () => void; onClose: () => void }) {
   return (
     <aside className="flex flex-col border-l border-surface-border" style={{ width: 400, flexShrink: 0, background: "var(--color-surface)" }}>
-      <div className="flex items-center justify-between px-3 h-9 border-b border-surface-border text-[11px] font-mono uppercase tracking-wider text-text-muted">
-        <span>working tree {diff?.isRepo ? `· ⎇ ${diff.branch}` : ""}</span>
-        <div className="flex gap-1.5"><button className="cz-mini" onClick={onRefresh}>refresh</button><button className="cz-mini" onClick={onClose}>close</button></div>
-      </div>
+      <div className="flex items-center justify-between px-3 h-9 border-b border-surface-border text-[11px] font-mono uppercase tracking-wider text-text-muted"><span>working tree {diff?.isRepo ? `· ⎇ ${diff.branch}` : ""}</span><div className="flex gap-1.5"><button className="cz-mini" onClick={onRefresh}>refresh</button><button className="cz-mini" onClick={onClose}>close</button></div></div>
       <div className="px-3 py-2 border-b border-surface-border font-mono text-[11.5px]" style={{ maxHeight: 150, overflowY: "auto" }}>
-        {!diff || !diff.isRepo ? <span className="italic text-text-tertiary">not a git repo</span>
-          : diff.files.length === 0 ? <span className="italic text-text-tertiary">working tree clean</span>
-          : diff.files.map((f, i) => <div key={i} className="whitespace-pre" style={{ color: "#d3d7df" }}>{f}</div>)}
+        {!diff || !diff.isRepo ? <span className="italic text-text-tertiary">not a git repo</span> : diff.files.length === 0 ? <span className="italic text-text-tertiary">working tree clean</span> : diff.files.map((f, i) => <div key={i} className="whitespace-pre" style={{ color: "#d3d7df" }}>{f}</div>)}
       </div>
       <ScrollArea><pre className="m-0 px-3 py-2.5 font-mono whitespace-pre" style={{ fontSize: 11.5, lineHeight: 1.5, color: "#aeb6c4" }}>{diff?.diff || ""}</pre></ScrollArea>
     </aside>

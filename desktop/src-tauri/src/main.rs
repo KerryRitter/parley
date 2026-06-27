@@ -53,17 +53,30 @@ struct ChatState {
 
 #[derive(Default, Clone)]
 struct Pin {
+    /// The agent this slot belongs to (a slot is `agent|model|provider`, so two
+    /// instances of the same agent at different models are separate slots).
+    agent: String,
     /// A session id we own (claude `--session-id`); None for agents that only
     /// support "resume the most recent" (codex `--last`, gemini `latest`).
     session_id: Option<String>,
-    /// True once this agent has run at least once in this chat (so the next turn
+    /// True once this slot has run at least once in this chat (so the next turn
     /// can resume warm instead of cold-starting).
     started: bool,
-    /// How many transcript turns this agent has already incorporated. The slice
+    /// How many transcript turns this slot has already incorporated. The slice
     /// after this index is the delta it needs to catch up on.
     seen: usize,
     calls: u32,
     total_ms: u128,
+}
+
+/// A unique session "slot": the same agent at a different model/provider is a
+/// different slot, so each keeps its own warm session.
+fn slot_of(agent: &str, model: &Option<String>, provider: &Option<String>) -> String {
+    format!(
+        "{agent}|{}|{}",
+        model.as_deref().unwrap_or(""),
+        provider.as_deref().unwrap_or("")
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,12 +222,27 @@ struct SendReq {
     prompt: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// Fuse panel — each entry is a configurable instance (duplicates allowed:
+    /// e.g. claude/opus + claude/sonnet).
     #[serde(default)]
-    panel: Vec<String>,
+    panel: Vec<Panelist>,
     #[serde(default)]
     judge: Option<String>,
     #[serde(default = "default_true")]
     yolo: bool,
+}
+
+/// One configured panel instance.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Panelist {
+    /// Stable id from the UI; used as the pane key (unique even for duplicates).
+    id: String,
+    agent: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -233,11 +261,23 @@ fn resolve_cwd(cwd: &Option<String>) -> PathBuf {
 
 #[derive(Clone)]
 struct AgentPlan {
-    agent: String,
     pane: String,
+    agent: String,
+    slot: String,
+    model: Option<String>,
+    provider: Option<String>,
     prompt: String,
     session: SessionFlags,
     warm: bool,
+}
+
+/// One thing to run this turn: a pane, an agent, and its model/provider.
+#[derive(Clone)]
+struct Target {
+    pane: String,
+    agent: String,
+    model: Option<String>,
+    provider: Option<String>,
 }
 
 /// Build the prompt for an agent: its catch-up delta (if any) + the new message.
@@ -268,10 +308,13 @@ fn render_turns(turns: &[Turn]) -> String {
         .join("\n\n")
 }
 
-/// Plan one agent's turn given the chat state. `user_idx` is the index of the
-/// just-appended user message in the transcript.
-fn plan_agent(chat: &ChatState, agent: &str, user_idx: usize, message: &str) -> AgentPlan {
-    let pin = chat.pins.get(agent).cloned().unwrap_or_default();
+/// Plan one target's turn given the chat state. `user_idx` is the index of the
+/// just-appended user message in the transcript. Sessions are keyed by *slot*
+/// (agent|model|provider) so the same agent at different models stays separate.
+fn plan_agent(chat: &ChatState, target: &Target, user_idx: usize, message: &str) -> AgentPlan {
+    let agent = target.agent.as_str();
+    let slot = slot_of(agent, &target.model, &target.provider);
+    let pin = chat.pins.get(&slot).cloned().unwrap_or_default();
     let (preamble, session, warm) = if pin.started {
         // Warm: the agent's own thread already holds its history; feed only what
         // happened since it last spoke (other agents' turns), excluding the new
@@ -310,8 +353,11 @@ fn plan_agent(chat: &ChatState, agent: &str, user_idx: usize, message: &str) -> 
         )
     };
     AgentPlan {
+        pane: target.pane.clone(),
         agent: agent.to_string(),
-        pane: agent.to_string(),
+        slot,
+        model: target.model.clone(),
+        provider: target.provider.clone(),
         prompt: compose(&preamble, message),
         session,
         warm,
@@ -546,29 +592,57 @@ async fn send_message(
         return Ok(());
     }
 
-    // Resolve `auto` to a concrete agent up front (so it gets its own warm pin).
-    let agents: Vec<String> = if req.target == "fuse" {
+    // Build the targets to run this turn. Fuse → one per configured panelist
+    // (duplicates allowed, each with its own model/provider). Single/auto → one,
+    // carrying the chosen model/provider.
+    let targets: Vec<Target> = if req.target == "fuse" {
         if req.panel.is_empty() {
-            DEFAULT_PANEL.iter().map(|s| s.to_string()).collect()
+            DEFAULT_PANEL
+                .iter()
+                .map(|a| Target {
+                    pane: (*a).to_string(),
+                    agent: (*a).to_string(),
+                    model: None,
+                    provider: None,
+                })
+                .collect()
         } else {
-            req.panel.clone()
+            req.panel
+                .iter()
+                .map(|p| Target {
+                    pane: p.id.clone(),
+                    agent: p.agent.clone(),
+                    model: p.model.clone(),
+                    provider: p.provider.clone(),
+                })
+                .collect()
         }
     } else if req.target == "auto" {
         let inv = resolve_invocation(
             "auto",
             &req.prompt,
-            &None,
-            &None,
+            &req.model,
+            &req.provider,
             req.yolo,
             &SessionFlags::default(),
         )
         .await?;
-        vec![basename(&inv.command)]
+        vec![Target {
+            pane: "main".into(),
+            agent: basename(&inv.command),
+            model: req.model.clone(),
+            provider: req.provider.clone(),
+        }]
     } else {
-        vec![req.target.clone()]
+        vec![Target {
+            pane: "main".into(),
+            agent: req.target.clone(),
+            model: req.model.clone(),
+            provider: req.provider.clone(),
+        }]
     };
 
-    // Append the user turn, then plan every agent under one lock.
+    // Append the user turn, then plan every target under one lock.
     let plans: Vec<AgentPlan> = {
         let mut chats = state.chats.lock().map_err(|_| "state lock poisoned")?;
         let chat = chats.entry(req.chat_id.clone()).or_default();
@@ -577,31 +651,24 @@ async fn send_message(
             text: req.prompt.clone(),
         });
         let user_idx = chat.transcript.len() - 1;
-        agents
+        targets
             .iter()
-            .map(|a| plan_agent(chat, a, user_idx, &req.prompt))
+            .map(|t| plan_agent(chat, t, user_idx, &req.prompt))
             .collect()
     };
 
-    // Run every agent concurrently, each streaming into its own pane.
+    // Run every target concurrently, each streaming into its own pane.
     let mut handles = Vec::new();
     for plan in plans {
         let app = app.clone();
         let req = req.clone();
         let cwd = cwd.clone();
         handles.push(tokio::spawn(async move {
-            // model/provider apply to a single primary agent; in fuse mode the
-            // panelists use their defaults and the judge gets the override.
-            let (model, provider) = if req.target == "fuse" {
-                (None, None)
-            } else {
-                (req.model.clone(), req.provider.clone())
-            };
             match resolve_invocation(
                 &plan.agent,
                 &plan.prompt,
-                &model,
-                &provider,
+                &plan.model,
+                &plan.provider,
                 req.yolo,
                 &plan.session,
             )
@@ -638,10 +705,11 @@ async fn send_message(
     }
 
     if req.target == "fuse" {
+        // Label distinguishes duplicate agents (claude (opus) vs claude (sonnet)).
         let answers: Vec<(String, String)> = results
             .iter()
             .filter(|(_, t, _)| !t.trim().is_empty())
-            .map(|(p, t, _)| (p.agent.clone(), t.clone()))
+            .map(|(p, t, _)| (panelist_label(&p.agent, &p.model), t.clone()))
             .collect();
         // Commit each panelist's warm pin first.
         commit_pins(&state, &req.chat_id, &results)?;
@@ -679,21 +747,37 @@ async fn send_message(
         )
         .await?;
         // The fused answer is the canonical turn the whole panel shares next time.
-        push_assistant(&state, &req.chat_id, "fused", &fused, &agents)?;
+        let slots: Vec<String> = results.iter().map(|(p, _, _)| p.slot.clone()).collect();
+        push_assistant(&state, &req.chat_id, "fused", &fused, &slots)?;
     } else {
         // Single agent (or resolved auto).
         if let Some((plan, text, ms)) = results.into_iter().next() {
-            commit_pin(&state, &req.chat_id, &plan.agent, &plan.session, ms)?;
+            commit_pin(
+                &state,
+                &req.chat_id,
+                &plan.slot,
+                &plan.agent,
+                &plan.session,
+                ms,
+            )?;
             push_assistant(
                 &state,
                 &req.chat_id,
                 &plan.agent,
                 &text,
-                std::slice::from_ref(&plan.agent),
+                std::slice::from_ref(&plan.slot),
             )?;
         }
     }
     Ok(())
+}
+
+/// Display label for a panelist, distinguishing duplicate agents by model.
+fn panelist_label(agent: &str, model: &Option<String>) -> String {
+    match model {
+        Some(m) if !m.trim().is_empty() => format!("{agent} ({m})"),
+        _ => agent.to_string(),
+    }
 }
 
 // ---- state mutators --------------------------------------------------------
@@ -711,14 +795,14 @@ fn push_user(state: &State<'_, AppState>, chat_id: &str, text: &str) -> Result<(
     Ok(())
 }
 
-/// Append an assistant turn and advance the `seen` cursor for the listed agents
+/// Append an assistant turn and advance the `seen` cursor for the listed slots
 /// so they don't re-read their own contribution as catch-up next turn.
 fn push_assistant(
     state: &State<'_, AppState>,
     chat_id: &str,
     role: &str,
     text: &str,
-    seen_agents: &[String],
+    seen_slots: &[String],
 ) -> Result<(), String> {
     let mut chats = state.chats.lock().map_err(|_| "state lock poisoned")?;
     let chat = chats.entry(chat_id.to_string()).or_default();
@@ -727,8 +811,8 @@ fn push_assistant(
         text: text.trim().into(),
     });
     let len = chat.transcript.len();
-    for a in seen_agents {
-        chat.pins.entry(a.clone()).or_default().seen = len;
+    for s in seen_slots {
+        chat.pins.entry(s.clone()).or_default().seen = len;
     }
     Ok(())
 }
@@ -736,13 +820,15 @@ fn push_assistant(
 fn commit_pin(
     state: &State<'_, AppState>,
     chat_id: &str,
+    slot: &str,
     agent: &str,
     session: &SessionFlags,
     ms: u128,
 ) -> Result<(), String> {
     let mut chats = state.chats.lock().map_err(|_| "state lock poisoned")?;
     let chat = chats.entry(chat_id.to_string()).or_default();
-    let pin = chat.pins.entry(agent.to_string()).or_default();
+    let pin = chat.pins.entry(slot.to_string()).or_default();
+    pin.agent = agent.to_string();
     pin.started = true;
     pin.calls += 1;
     pin.total_ms += ms;
@@ -758,7 +844,7 @@ fn commit_pins(
     results: &[(AgentPlan, String, u128)],
 ) -> Result<(), String> {
     for (plan, _, ms) in results {
-        commit_pin(state, chat_id, &plan.agent, &plan.session, *ms)?;
+        commit_pin(state, chat_id, &plan.slot, &plan.agent, &plan.session, *ms)?;
     }
     Ok(())
 }
@@ -779,16 +865,19 @@ fn usage_stats(state: State<'_, AppState>) -> Result<Vec<AgentUsage>, String> {
     let chats = state.chats.lock().map_err(|_| "state lock poisoned")?;
     let mut agg: BTreeMap<String, AgentUsage> = BTreeMap::new();
     for chat in chats.values() {
-        for (agent, pin) in &chat.pins {
-            let e = agg.entry(agent.clone()).or_insert(AgentUsage {
-                agent: agent.clone(),
+        for pin in chat.pins.values() {
+            if pin.agent.is_empty() {
+                continue;
+            }
+            let e = agg.entry(pin.agent.clone()).or_insert(AgentUsage {
+                agent: pin.agent.clone(),
                 calls: 0,
                 total_ms: 0,
                 warm: false,
             });
             e.calls += pin.calls;
             e.total_ms += pin.total_ms;
-            e.warm = e.warm || (pin.started && pin.session_id.is_some());
+            e.warm = e.warm || pin.started;
         }
     }
     let mut v: Vec<AgentUsage> = agg.into_values().collect();
@@ -869,6 +958,53 @@ fn reset_chat(state: State<'_, AppState>, chat_id: String) -> Result<(), String>
     let mut chats = state.chats.lock().map_err(|_| "state lock poisoned")?;
     chats.remove(&chat_id);
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirEntry {
+    name: String,
+    path: String,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirListing {
+    path: String,
+    parent: Option<String>,
+    dirs: Vec<DirEntry>,
+}
+
+/// List sub-directories of `path` (or $HOME when empty) for the in-app folder
+/// explorer. Directories only; hidden entries skipped; sorted.
+#[tauri::command]
+fn list_dir(path: Option<String>) -> Result<DirListing, String> {
+    let dir = match path.as_deref().filter(|p| !p.trim().is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/")),
+    };
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+    let mut dirs = Vec::new();
+    let read = std::fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            dirs.push(DirEntry {
+                name,
+                path: entry.path().to_string_lossy().into_owned(),
+            });
+        }
+    }
+    dirs.sort_by_key(|d| d.name.to_lowercase());
+    Ok(DirListing {
+        path: dir.to_string_lossy().into_owned(),
+        parent: dir.parent().map(|p| p.to_string_lossy().into_owned()),
+        dirs,
+    })
 }
 
 /// Save a pasted/attached image to a temp file and return its absolute path, so
@@ -982,7 +1118,8 @@ fn main() {
             git_diff,
             git_discard,
             reset_chat,
-            save_paste
+            save_paste,
+            list_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running Parley desktop");
@@ -999,13 +1136,22 @@ mod tests {
         }
     }
 
+    fn target(agent: &str) -> Target {
+        Target {
+            pane: agent.into(),
+            agent: agent.into(),
+            model: None,
+            provider: None,
+        }
+    }
+
     #[test]
     fn cold_start_plans_full_prior_context_and_sets_claude_id() {
         let mut chat = ChatState::default();
         chat.transcript.push(turn("you", "first"));
         chat.transcript.push(turn("gemini", "an answer"));
         chat.transcript.push(turn("you", "second")); // user_idx = 2
-        let plan = plan_agent(&chat, "claude", 2, "second");
+        let plan = plan_agent(&chat, &target("claude"), 2, "second");
         assert!(!plan.warm);
         assert!(plan.prompt.contains("first"));
         assert!(plan.prompt.contains("an answer"));
@@ -1021,8 +1167,9 @@ mod tests {
         chat.transcript.push(turn("claude", "a1"));
         // claude is warm, has seen up through index 2 (its own reply)
         chat.pins.insert(
-            "claude".into(),
+            slot_of("claude", &None, &None),
             Pin {
+                agent: "claude".into(),
                 session_id: Some("sid".into()),
                 started: true,
                 seen: 2,
@@ -1032,7 +1179,7 @@ mod tests {
         );
         chat.transcript.push(turn("gemini", "g-said-this")); // other agent spoke
         chat.transcript.push(turn("you", "q2")); // user_idx = 3
-        let plan = plan_agent(&chat, "claude", 3, "q2");
+        let plan = plan_agent(&chat, &target("claude"), 3, "q2");
         assert!(plan.warm);
         assert_eq!(plan.session.resume.as_deref(), Some("sid"));
         // delta includes gemini's turn but NOT claude's own earlier reply
@@ -1047,8 +1194,9 @@ mod tests {
         chat.transcript.push(turn("you", "q1"));
         chat.transcript.push(turn("codex", "a1"));
         chat.pins.insert(
-            "codex".into(),
+            slot_of("codex", &None, &None),
             Pin {
+                agent: "codex".into(),
                 session_id: None,
                 started: true,
                 seen: 2,
@@ -1057,8 +1205,20 @@ mod tests {
             },
         );
         chat.transcript.push(turn("you", "q2"));
-        let plan = plan_agent(&chat, "codex", 2, "q2");
+        let plan = plan_agent(&chat, &target("codex"), 2, "q2");
         assert_eq!(plan.session.resume.as_deref(), Some("latest"));
+    }
+
+    #[test]
+    fn same_agent_different_model_are_separate_slots() {
+        let opus = slot_of("claude", &Some("opus".into()), &None);
+        let sonnet = slot_of("claude", &Some("sonnet".into()), &None);
+        assert_ne!(opus, sonnet);
+        assert_eq!(
+            panelist_label("claude", &Some("opus".into())),
+            "claude (opus)"
+        );
+        assert_eq!(panelist_label("claude", &None), "claude");
     }
 
     #[test]

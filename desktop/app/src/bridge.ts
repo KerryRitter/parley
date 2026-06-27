@@ -27,6 +27,12 @@ export interface ChatEvent {
   ms?: number;
   cmd?: string;
 }
+export interface Panelist {
+  id: string;
+  agent: string;
+  model?: string | null;
+  provider?: string | null;
+}
 export interface SendReq {
   chatId: string;
   msgId: string;
@@ -35,9 +41,15 @@ export interface SendReq {
   provider?: string | null;
   prompt: string;
   cwd?: string | null;
-  panel: string[];
+  panel: Panelist[];
   judge?: string | null;
   yolo: boolean;
+}
+export interface DirEntry { name: string; path: string; }
+export interface DirListing { path: string; parent: string | null; dirs: DirEntry[]; }
+
+export function listDir(path: string | null): Promise<DirListing> {
+  return invoke<DirListing>("list_dir", { path });
 }
 export interface GitDiff {
   isRepo: boolean;
@@ -122,9 +134,7 @@ const BIN: Record<string, string> = {
   opencode: "opencode run «prompt»",
 };
 
-async function streamPane(req: SendReq, pane: string, agent: string, lines: string[], warm: boolean) {
-  const base = BIN[agent] ?? `${agent} «prompt»`;
-  const cmd = `${base}${warm ? " --resume 1a2b3c" : ""} --dangerously-skip-permissions`;
+async function streamRaw(req: SendReq, pane: string, agent: string, lines: string[], warm: boolean, cmd: string) {
   dispatch({ chatId: req.chatId, msgId: req.msgId, pane, kind: "start", agent, warm, cmd });
   for (const ln of lines) {
     await sleep(85);
@@ -133,17 +143,34 @@ async function streamPane(req: SendReq, pane: string, agent: string, lines: stri
   await sleep(70);
   const ms = 600 + lines.length * 110;
   const u = (usage[agent] ??= { agent, calls: 0, totalMs: 0, warm: false });
-  u.calls += 1;
-  u.totalMs += ms;
-  u.warm = u.warm || warm;
+  u.calls += 1; u.totalMs += ms; u.warm = u.warm || warm;
   dispatch({ chatId: req.chatId, msgId: req.msgId, pane, kind: "done", code: 0, ms });
+}
+async function streamPane(req: SendReq, pane: string, agent: string, lines: string[], warm: boolean) {
+  const base = BIN[agent] ?? `${agent} «prompt»`;
+  await streamRaw(req, pane, agent, lines, warm, `${base}${warm ? " --resume 1a2b3c" : ""} --dangerously-skip-permissions`);
+}
+async function streamPaneFor(req: SendReq, p: Panelist, lines: string[], warm: boolean) {
+  const base = BIN[p.agent] ?? `${p.agent} «prompt»`;
+  const prov = p.provider ? ` --provider ${p.provider}` : "";
+  const m = p.model ? ` -m ${p.model}` : "";
+  await streamRaw(req, p.id, p.agent, lines, warm, `${base}${prov}${m}${warm ? " --resume 1a2b3c" : ""} --dangerously-skip-permissions`);
 }
 
 async function mockSend(req: SendReq) {
   if (req.target === "fuse") {
-    const panel = req.panel.length ? req.panel : ["claude", "codex", "antigravity"];
-    await Promise.all(panel.map((a) => streamPane(req, a, a, SAMPLE[a] ?? [`(answer from ${a})`], seen.has(a))));
-    panel.forEach((a) => seen.add(a));
+    const panel: Panelist[] = req.panel.length
+      ? req.panel
+      : ["claude", "codex", "antigravity"].map((a) => ({ id: a, agent: a }));
+    await Promise.all(
+      panel.map((p) => {
+        const slot = `${p.agent}|${p.model || ""}|${p.provider || ""}`;
+        const lines = (SAMPLE[p.agent] ?? [`(answer from ${p.agent})`]).map((l) =>
+          p.model ? l : l
+        );
+        return streamPaneFor(req, p, lines, seen.has(slot)).then(() => seen.add(slot));
+      })
+    );
     const judge = req.judge || "claude";
     const fused = [
       "CONSENSUS",
@@ -190,6 +217,17 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       return Object.values(usage).sort((a, b) => b.calls - a.calls);
     case "save_paste":
       return `/tmp/parley-attachments/${(args as { name?: string })?.name || "paste.png"}`;
+    case "list_dir": {
+      const path = (args as { path?: string | null })?.path || "/home/dev";
+      const kids = path === "/home/dev"
+        ? ["projects", "Workspaces", "Documents", "Downloads"]
+        : ["src", "tests", "docs", ".hidden-skipped".replace(".hidden-skipped", "node_modules")];
+      return {
+        path,
+        parent: path === "/" ? null : path.split("/").slice(0, -1).join("/") || "/",
+        dirs: kids.map((n) => ({ name: n, path: `${path === "/" ? "" : path}/${n}` })),
+      } satisfies DirListing;
+    }
     case "git_diff":
       return {
         isRepo: true,
