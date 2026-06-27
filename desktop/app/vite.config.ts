@@ -6,8 +6,11 @@ import tailwindcss from "@tailwindcss/vite";
 // development and the built `dist/` in production.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  // @cruzjs/ui ships TypeScript source; let Vite prebundle it.
-  optimizeDeps: { include: ["@cruzjs/ui"] },
+  // Don't pre-bundle the @cruzjs/ui barrel: it re-exports framework-coupled
+  // components (Toast → @cruzjs/core, TabNavigation → react-router) that the dev
+  // optimizer can't resolve. We only import via subpaths (see cruz.ts), so Vite
+  // can transform those on demand.
+  optimizeDeps: { exclude: ["@cruzjs/ui"] },
   clearScreen: false,
   server: {
     port: 1420,
