@@ -2,7 +2,7 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Collapsible, CommandPalette, Input, Kbd, Popover, ScrollArea, Spinner, Switch } from "./cruz";
 import {
-  invoke, listDir, listFiles, listSlashCommands, gitHeadFile, readFile, onChatEvent, pickFolder, savePaste,
+  invoke, IS_TAURI, listDir, listFiles, listSlashCommands, gitHeadFile, readFile, onChatEvent, pickFolder, savePaste,
   type AgentInfo, type AgentList, type AgentUsage, type ChatEvent, type DirListing, type GitDiff, type Panelist, type SendReq,
 } from "./bridge";
 import { DEFAULT_PANEL, NEEDS_PROVIDER, PRESETS, color, display } from "./agents";
@@ -151,6 +151,13 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
 
   const refreshDiff = useCallback(() => { invoke<GitDiff>("git_diff", { cwd: cwd || null }).then(setDiff).catch(() => setDiff(null)); }, [cwd]);
   const refreshUsage = useCallback(() => { invoke<AgentUsage[]>("usage_stats").then(setUsage).catch(() => setUsage([])); }, []);
+  // In the real app the OS-native folder dialog is the most reliable real-FS
+  // picker, so use it directly. In a plain browser there is no native dialog and
+  // no filesystem access, so fall back to the in-app explorer (sample data).
+  const doOpen = useCallback(() => {
+    if (IS_TAURI) { pickFolder().then((f) => { if (f) { setCwd(f); setTimeout(refreshDiff, 0); } }); }
+    else setFolderOpen(true);
+  }, [refreshDiff]);
 
   useEffect(() => {
     invoke<AgentList>("list_agents").then((list) => {
@@ -196,7 +203,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
   }, [cwd, onTitle]);
 
   // expose folder-open to the App tab row
-  useEffect(() => { registerOpen(() => setFolderOpen(true)); }, [registerOpen]);
+  useEffect(() => { registerOpen(doOpen); }, [registerOpen, doOpen]);
 
   // console-level keyboard (only the active console responds)
   useEffect(() => {
@@ -222,10 +229,10 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
     { key: "single", label: "Single agent (Fuse off)", run: () => setFuse(false) },
     { key: "clear", label: "Clear run log", run: () => setMessages([]) },
     { key: "cockpit", label: "Toggle code cockpit", run: () => { setCockpit((v) => !v); refreshDiff(); } },
-    { key: "open", label: "Open folder…", run: () => setFolderOpen(true) },
+    { key: "open", label: "Open folder…", run: doOpen },
     { key: "auto", label: "Primary → Auto (route each message)", run: () => setPrimary("auto") },
     ...agents.filter((a) => a.installed).map((a) => ({ key: a.name, label: `Primary → ${display(a.name)}`, run: () => setPrimary(a.name) })),
-  ], [agents, fuse, refreshDiff]);
+  ], [agents, fuse, refreshDiff, doOpen]);
 
   async function run() {
     const raw = input.trim();
@@ -281,7 +288,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
         <Popover placement="bottom-end" trigger={<button className="cz-icon" title="Settings">⚙</button>}>
           <div className="p-3 grid gap-3" style={{ minWidth: 280 }}>
             <div className="grid gap-1"><span className="text-[11px] uppercase tracking-wide text-text-tertiary">Working directory</span>
-              <div className="flex gap-1.5"><Input size="sm" value={cwd} placeholder="$HOME" onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCwd(e.target.value)} /><button className="cz-mini" onClick={() => setFolderOpen(true)}>browse</button></div>
+              <div className="flex gap-1.5"><Input size="sm" value={cwd} placeholder="$HOME" onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCwd(e.target.value)} /><button className="cz-mini" onClick={doOpen}>browse</button></div>
             </div>
             <div className="flex items-center gap-2"><Switch checked={yolo} onChange={setYolo} size="sm" /><span className="text-xs text-text-secondary">yolo — act without prompting</span></div>
           </div>
@@ -323,7 +330,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
 
       {/* status bar */}
       <footer className="flex items-center gap-3 h-7 px-3 border-t border-surface-border font-mono text-[11px] text-text-muted" style={{ background: "rgba(255,255,255,.02)" }}>
-        <button className="hover:text-text" style={{ color: "var(--color-text-secondary)" }} onClick={() => setFolderOpen(true)} title="Open folder">{cwd || "~"}</button>
+        <button className="hover:text-text" style={{ color: "var(--color-text-secondary)" }} onClick={doOpen} title="Open folder">{cwd || "~"}</button>
         {diff?.isRepo && <span>⎇ {diff.branch || "—"}{diff.files.length ? <span style={{ color: "var(--color-warning)" }}>*{diff.files.length}</span> : ""}</span>}
         <div className="flex-1" />
         <span className="flex items-center gap-1"><Dot agent={primary} size={7} />{display(primary)}</span>
@@ -389,6 +396,7 @@ function FolderModal({ initial, onClose, onPick, onNative }: { initial: string; 
           <span className="font-mono text-[12px]">📂 open folder</span>
           <button className="cz-mini" onClick={onNative}>native picker</button>
         </div>
+        {!IS_TAURI && <div className="cz-folder-note font-mono text-[11px]">preview mode — sample folders. run the desktop app (<span style={{ color: "var(--color-primary)" }}>cargo tauri dev</span>) to browse your real files.</div>}
         <div className="cz-folder-path font-mono text-[12px]">{listing?.path || "…"}</div>
         <div className="cz-folder-list">
           {loading ? <div className="p-3 text-text-muted"><Spinner size="xs" /> loading…</div> : (
