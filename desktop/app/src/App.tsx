@@ -93,7 +93,6 @@ export function App() {
   return (
     <div className="flex flex-col h-screen">
       <div className="cz-tabstrip" data-tauri-drag-region>
-        <div className="cz-tabstrip-pad" />
         <span className="cz-brand"><span className="cz-brand-mark">⚖</span>parley</span>
         <button className="cz-pill" onClick={() => openers.current[active]?.()} title="Open folder (active console)">📂 open</button>
         <div className="cz-tab-sep" />

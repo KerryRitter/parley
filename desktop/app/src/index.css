@@ -260,19 +260,22 @@ body {
 .cz-folder-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 11px 14px; border-top: 1px solid var(--color-surface-border); }
 
 /* tab strip (many consoles) */
-.cz-tabstrip { display: flex; align-items: center; height: 40px; background: linear-gradient(180deg, #0f1116 0%, #090a0c 100%); border-bottom: 1px solid var(--color-surface-border); gap: 3px; padding: 0 8px; box-shadow: inset 0 -1px 0 rgba(255,255,255,.02), 0 1px 0 rgba(0,0,0,.5); }
-.cz-tabstrip-pad { width: 72px; flex-shrink: 0; }
-.cz-tab { position: relative; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px 0 12px; border-radius: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); cursor: pointer; user-select: none; border: 1px solid transparent; transition: background .14s var(--ease-smooth), color .14s, border-color .14s; }
-.cz-tab:hover { background: rgba(255,255,255,.045); color: var(--color-text-secondary); }
-.cz-tab-active { background: var(--color-surface); color: var(--color-text); border-color: var(--color-surface-border); box-shadow: 0 4px 14px -6px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.03); }
-.cz-tab-active::before { content: ""; position: absolute; left: 10px; right: 10px; top: -1px; height: 2px; border-radius: 0 0 2px 2px; background: linear-gradient(90deg, var(--color-primary-dark), var(--color-primary), var(--color-primary-light)); box-shadow: 0 0 10px rgba(240,163,94,.55); }
+/* Tab bar: tabs sit on the bottom edge; the active tab drops its bottom border
+   and matches the content color below, so it reads as a real folder-style tab
+   merged into the page. Brand is flush to the hard-left edge. */
+.cz-tabstrip { display: flex; align-items: flex-end; height: 40px; background: linear-gradient(180deg, #14171e 0%, #0e1015 100%); border-bottom: 1px solid var(--color-surface-border); gap: 0; padding: 0; box-shadow: 0 1px 0 rgba(0,0,0,.5); }
+.cz-tab { position: relative; align-self: flex-end; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 9px 0 13px; margin-bottom: -1px; font-family: var(--font-mono); font-size: 12px; color: var(--color-text-muted); cursor: pointer; user-select: none; border: 1px solid transparent; border-bottom: none; border-radius: 9px 9px 0 0; transition: background .14s var(--ease-smooth), color .14s; }
+.cz-tab:not(.cz-tab-active) + .cz-tab:not(.cz-tab-active)::after { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 1px; background: var(--color-surface-border); opacity: .5; }
+.cz-tab:hover:not(.cz-tab-active) { background: rgba(255,255,255,.035); color: var(--color-text-secondary); }
+.cz-tab-active { background: #0a0b0d; color: var(--color-text); border-color: var(--color-surface-border); }
+.cz-tab-active::before { content: ""; position: absolute; left: -1px; right: -1px; top: 0; height: 2px; background: linear-gradient(90deg, var(--color-primary-dark), var(--color-primary), var(--color-primary-light)); box-shadow: 0 0 10px rgba(240,163,94,.5); border-radius: 9px 9px 0 0; }
 .cz-tab-title { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cz-tab-dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; transition: background .2s; }
 .cz-dot-warm { box-shadow: 0 0 0 0 rgba(224,162,60,.5); animation: cz-pulse 1.5s var(--ease-smooth) infinite; }
 .cz-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; opacity: 0; color: var(--color-text-tertiary); font-size: 14px; line-height: 1; border-radius: 5px; transition: opacity .12s, color .12s, background .12s; }
 .cz-tab:hover .cz-tab-x, .cz-tab-active .cz-tab-x { opacity: .65; }
 .cz-tab-x:hover { opacity: 1 !important; color: var(--color-danger); background: rgba(233,105,95,.14); }
-.cz-tab-add { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; background: transparent; border: 0; color: var(--color-text-tertiary); font-size: 17px; cursor: pointer; border-radius: 8px; transition: color .12s, background .12s, transform .12s; }
+.cz-tab-add { align-self: center; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex-shrink: 0; margin-left: 6px; background: transparent; border: 0; color: var(--color-text-tertiary); font-size: 17px; cursor: pointer; border-radius: 8px; transition: color .12s, background .12s, transform .12s; }
 .cz-tab-add:hover { color: var(--color-primary); background: rgba(240,163,94,.1); transform: translateY(-.5px); }
 @keyframes cz-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(224,162,60,.5); } 50% { box-shadow: 0 0 0 4px rgba(224,162,60,0); } }
 
@@ -293,9 +296,9 @@ body {
 .cz-stop-sq { width: 8px; height: 8px; border-radius: 2px; background: var(--color-danger); box-shadow: 0 0 8px rgba(233,105,95,.6); }
 
 /* brand + separator in the tab row */
-.cz-brand { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-sans); font-weight: 680; font-size: 13.5px; letter-spacing: -.015em; padding: 0 4px 0 2px; user-select: none; color: var(--color-text); }
+.cz-brand { align-self: center; display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-sans); font-weight: 680; font-size: 13.5px; letter-spacing: -.015em; padding: 0 12px 0 13px; user-select: none; color: var(--color-text); }
 .cz-brand-mark { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: 6px; background: linear-gradient(150deg, var(--color-primary-light), var(--color-primary-dark)); color: #1a1205; font-size: 12px; box-shadow: 0 1px 5px rgba(240,163,94,.4), inset 0 1px 0 rgba(255,255,255,.3); }
-.cz-tab-sep { width: 1px; height: 18px; background: linear-gradient(180deg, transparent, var(--color-surface-border), transparent); margin: 0 5px; align-self: center; flex-shrink: 0; }
+.cz-tab-sep { width: 1px; height: 18px; background: linear-gradient(180deg, transparent, var(--color-surface-border), transparent); margin: 0 8px 0 4px; align-self: center; flex-shrink: 0; }
 .cz-tabstrip .cz-pill { height: 26px; align-self: center; border-radius: 8px; }
 
 /* cockpit changed-file list */
