@@ -69,11 +69,15 @@ struct Pin {
     total_ms: u128,
 }
 
-/// A unique session "slot": the same agent at a different model/provider is a
-/// different slot, so each keeps its own warm session.
-fn slot_of(agent: &str, model: &Option<String>, provider: &Option<String>) -> String {
+/// A unique session "slot": the same agent at a different model/provider — or in
+/// a different working directory — is a different slot, so each keeps its own warm
+/// session. Cwd matters because agent CLIs scope sessions to the directory they
+/// ran in (e.g. claude `--resume <id>` only finds the session under that cwd's
+/// project), so resuming a pin across a folder change fails. Partitioning by cwd
+/// makes a folder switch cold-start a fresh session instead.
+fn slot_of(agent: &str, model: &Option<String>, provider: &Option<String>, cwd: &str) -> String {
     format!(
-        "{agent}|{}|{}",
+        "{agent}|{}|{}|{cwd}",
         model.as_deref().unwrap_or(""),
         provider.as_deref().unwrap_or("")
     )
@@ -310,10 +314,17 @@ fn render_turns(turns: &[Turn]) -> String {
 
 /// Plan one target's turn given the chat state. `user_idx` is the index of the
 /// just-appended user message in the transcript. Sessions are keyed by *slot*
-/// (agent|model|provider) so the same agent at different models stays separate.
-fn plan_agent(chat: &ChatState, target: &Target, user_idx: usize, message: &str) -> AgentPlan {
+/// (agent|model|provider|cwd) so the same agent at different models — or after a
+/// folder change — stays separate.
+fn plan_agent(
+    chat: &ChatState,
+    target: &Target,
+    user_idx: usize,
+    message: &str,
+    cwd: &str,
+) -> AgentPlan {
     let agent = target.agent.as_str();
-    let slot = slot_of(agent, &target.model, &target.provider);
+    let slot = slot_of(agent, &target.model, &target.provider, cwd);
     let pin = chat.pins.get(&slot).cloned().unwrap_or_default();
     let (preamble, session, warm) = if pin.started {
         // Warm: the agent's own thread already holds its history; feed only what
@@ -651,9 +662,10 @@ async fn send_message(
             text: req.prompt.clone(),
         });
         let user_idx = chat.transcript.len() - 1;
+        let cwd_key = cwd.to_string_lossy();
         targets
             .iter()
-            .map(|t| plan_agent(chat, t, user_idx, &req.prompt))
+            .map(|t| plan_agent(chat, t, user_idx, &req.prompt, &cwd_key))
             .collect()
     };
 
@@ -1284,7 +1296,7 @@ mod tests {
         chat.transcript.push(turn("you", "first"));
         chat.transcript.push(turn("gemini", "an answer"));
         chat.transcript.push(turn("you", "second")); // user_idx = 2
-        let plan = plan_agent(&chat, &target("claude"), 2, "second");
+        let plan = plan_agent(&chat, &target("claude"), 2, "second", "/repo");
         assert!(!plan.warm);
         assert!(plan.prompt.contains("first"));
         assert!(plan.prompt.contains("an answer"));
@@ -1300,7 +1312,7 @@ mod tests {
         chat.transcript.push(turn("claude", "a1"));
         // claude is warm, has seen up through index 2 (its own reply)
         chat.pins.insert(
-            slot_of("claude", &None, &None),
+            slot_of("claude", &None, &None, "/repo"),
             Pin {
                 agent: "claude".into(),
                 session_id: Some("sid".into()),
@@ -1312,7 +1324,7 @@ mod tests {
         );
         chat.transcript.push(turn("gemini", "g-said-this")); // other agent spoke
         chat.transcript.push(turn("you", "q2")); // user_idx = 3
-        let plan = plan_agent(&chat, &target("claude"), 3, "q2");
+        let plan = plan_agent(&chat, &target("claude"), 3, "q2", "/repo");
         assert!(plan.warm);
         assert_eq!(plan.session.resume.as_deref(), Some("sid"));
         // delta includes gemini's turn but NOT claude's own earlier reply
@@ -1327,7 +1339,7 @@ mod tests {
         chat.transcript.push(turn("you", "q1"));
         chat.transcript.push(turn("codex", "a1"));
         chat.pins.insert(
-            slot_of("codex", &None, &None),
+            slot_of("codex", &None, &None, "/repo"),
             Pin {
                 agent: "codex".into(),
                 session_id: None,
@@ -1338,20 +1350,49 @@ mod tests {
             },
         );
         chat.transcript.push(turn("you", "q2"));
-        let plan = plan_agent(&chat, &target("codex"), 2, "q2");
+        let plan = plan_agent(&chat, &target("codex"), 2, "q2", "/repo");
         assert_eq!(plan.session.resume.as_deref(), Some("latest"));
     }
 
     #[test]
     fn same_agent_different_model_are_separate_slots() {
-        let opus = slot_of("claude", &Some("opus".into()), &None);
-        let sonnet = slot_of("claude", &Some("sonnet".into()), &None);
+        let opus = slot_of("claude", &Some("opus".into()), &None, "/repo");
+        let sonnet = slot_of("claude", &Some("sonnet".into()), &None, "/repo");
         assert_ne!(opus, sonnet);
         assert_eq!(
             panelist_label("claude", &Some("opus".into())),
             "claude (opus)"
         );
         assert_eq!(panelist_label("claude", &None), "claude");
+    }
+
+    #[test]
+    fn changing_cwd_cold_starts_a_fresh_session() {
+        // A warm claude pin from one folder must NOT be resumed in another folder
+        // (agent sessions are dir-scoped — resuming there fails). The new cwd is a
+        // separate slot, so it cold-starts with a fresh id and the full transcript.
+        let mut chat = ChatState::default();
+        chat.transcript.push(turn("you", "q1"));
+        chat.transcript.push(turn("claude", "a1"));
+        chat.pins.insert(
+            slot_of("claude", &None, &None, "/home/me"),
+            Pin {
+                agent: "claude".into(),
+                session_id: Some("home-sid".into()),
+                started: true,
+                seen: 2,
+                calls: 1,
+                total_ms: 10,
+            },
+        );
+        chat.transcript.push(turn("you", "q2")); // user_idx = 2
+                                                 // Same agent, but now in a different directory.
+        let plan = plan_agent(&chat, &target("claude"), 2, "q2", "/home/me/project");
+        assert!(!plan.warm); // cold start, not a resume
+        assert!(plan.session.resume.is_none());
+        assert!(plan.session.set_id.is_some());
+        assert_ne!(plan.session.set_id.as_deref(), Some("home-sid"));
+        assert!(plan.prompt.contains("a1")); // full prior context replayed as preamble
     }
 
     #[test]
