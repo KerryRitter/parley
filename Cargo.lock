@@ -2083,6 +2083,7 @@ version = "0.4.0"
 name = "parley-desktop"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tauri",

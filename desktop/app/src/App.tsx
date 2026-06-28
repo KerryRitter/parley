@@ -132,8 +132,10 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
   const [history, setHistory] = useState<string[]>([]);
   const [cockpit, setCockpit] = useState(false);
   const [diff, setDiff] = useState<GitDiff | null>(null);
+  const [diffFile, setDiffFile] = useState<string | null>(null);
   const [usage, setUsage] = useState<AgentUsage[]>([]);
   const [palette, setPalette] = useState(false);
+  const [filePalette, setFilePalette] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
   const [folderOpen, setFolderOpen] = useState(false);
   const [slashCmds, setSlashCmds] = useState<string[]>([]);
@@ -156,6 +158,14 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
   const doOpen = useCallback(() => {
     if (IS_TAURI) { pickFolder().then((f) => { if (f) { setCwd(f); setTimeout(refreshDiff, 0); } }); }
     else setFolderOpen(true);
+  }, [refreshDiff]);
+
+  // Open a file in the Monaco diff cockpit (HEAD vs working).
+  const openFile = useCallback((path: string) => {
+    setDiffFile(path);
+    setCockpit(true);
+    setFilePalette(false);
+    refreshDiff();
   }, [refreshDiff]);
 
   useEffect(() => {
@@ -213,6 +223,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
       if (k === "l") { e.preventDefault(); inputRef.current?.focus(); }
       else if (k === "b") { e.preventDefault(); setRailOpen((v) => !v); }
       else if (k === "j") { e.preventDefault(); setCockpit((v) => { if (!v) refreshDiff(); return !v; }); }
+      else if (k === "p") { e.preventDefault(); setFilePalette(true); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -228,6 +239,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
     { key: "single", label: "Single agent (Fuse off)", run: () => setFuse(false) },
     { key: "clear", label: "Clear run log", run: () => setMessages([]) },
     { key: "cockpit", label: "Toggle code cockpit", run: () => { setCockpit((v) => !v); refreshDiff(); } },
+    { key: "openfile", label: "Open file… (⌘P)", run: () => setFilePalette(true) },
     { key: "open", label: "Open folder…", run: doOpen },
     { key: "auto", label: "Primary → Auto (route each message)", run: () => setPrimary("auto") },
     ...agents.filter((a) => a.installed).map((a) => ({ key: a.name, label: `Primary → ${display(a.name)}`, run: () => setPrimary(a.name) })),
@@ -274,7 +286,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
     setMessages((prev) => prev.map((m) => (!m.done && m.role === "assistant" ? { ...m, status: "stopped" } : m)));
   }
 
-  const paletteItems = commands.map((c) => ({ id: c.key, group: ["fuse", "single", "clear", "cockpit", "open"].includes(c.key) ? "Actions" : "Primary agent", label: c.label, onSelect: c.run }));
+  const paletteItems = commands.map((c) => ({ id: c.key, group: ["fuse", "single", "clear", "cockpit", "openfile", "open"].includes(c.key) ? "Actions" : "Primary agent", label: c.label, onSelect: c.run }));
 
   return (
     <div className="flex flex-col h-full">
@@ -332,7 +344,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
             slashCmds={slashCmds} fileSearch={(q) => listFiles(cwd || null, q)} history={history} histIdx={histIdx} inputRef={inputRef} />
         </main>
 
-        {cockpit && <Cockpit diff={diff} cwd={cwd} onRefresh={refreshDiff} onClose={() => setCockpit(false)} />}
+        {cockpit && <Cockpit diff={diff} cwd={cwd} selected={diffFile} onSelect={setDiffFile} onRefresh={refreshDiff} onClose={() => setCockpit(false)} />}
       </div>
 
       {/* status bar */}
@@ -348,6 +360,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
       </footer>
 
       <CommandPalette open={palette} onOpenChange={setPalette} items={paletteItems} placeholder="Run a command…" />
+      {filePalette && <FilePalette cwd={cwd} onClose={() => setFilePalette(false)} onPick={openFile} />}
       {folderOpen && <FolderModal initial={cwd} onClose={() => setFolderOpen(false)} onPick={(p) => { setCwd(p); setFolderOpen(false); setTimeout(refreshDiff, 0); }} onNative={async () => { const f = await pickFolder(); if (f) { setCwd(f); setFolderOpen(false); setTimeout(refreshDiff, 0); } }} />}
     </div>
   );
@@ -418,6 +431,54 @@ function FolderModal({ initial, onClose, onPick, onNative }: { initial: string; 
           <button className="cz-mini" onClick={onClose}>cancel</button>
           <button className="cz-run" disabled={!listing} onClick={() => listing && onPick(listing.path)}>use this folder</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Ctrl+P quick-open: live file search (server-side), open the pick in the Monaco
+// diff cockpit.
+function FilePalette({ cwd, onClose, onPick }: { cwd: string; onClose: () => void; onPick: (p: string) => void }) {
+  const [q, setQ] = useState("");
+  const [files, setFiles] = useState<string[]>([]);
+  const [sel, setSel] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    let live = true;
+    listFiles(cwd || null, q).then((f) => { if (live) { setFiles(f); setSel(0); } }).catch(() => {});
+    return () => { live = false; };
+  }, [cwd, q]);
+  useEffect(() => { (listRef.current?.querySelector(`[data-i="${sel}"]`) as HTMLElement | null)?.scrollIntoView({ block: "nearest" }); }, [sel]);
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, files.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (files[sel]) onPick(files[sel]); }
+    else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+  }
+  return (
+    <div className="cz-overlay cz-overlay-top" onClick={onClose}>
+      <div className="cz-fp" onClick={(e) => e.stopPropagation()}>
+        <div className="cz-fp-head">
+          <span style={{ color: "var(--color-primary)" }}>⌕</span>
+          <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} placeholder="open file by name…" spellCheck={false} autoComplete="off" />
+        </div>
+        <div className="cz-fp-list" ref={listRef}>
+          {files.length === 0 ? <div className="cz-fp-empty">{q ? "no matching files" : "type to search files…"}</div>
+            : files.map((f, i) => {
+                const slash = f.lastIndexOf("/");
+                const name = slash >= 0 ? f.slice(slash + 1) : f;
+                const dir = slash >= 0 ? f.slice(0, slash + 1) : "";
+                return (
+                  <button key={f} data-i={i} className={"cz-fp-item" + (i === sel ? " cz-fp-sel" : "")} onMouseEnter={() => setSel(i)} onClick={() => onPick(f)}>
+                    <span className="cz-fp-name">{name}</span>
+                    {dir && <span className="cz-fp-dir">{dir}</span>}
+                  </button>
+                );
+              })}
+        </div>
+        <div className="cz-fp-foot">↑↓ navigate · ⏎ open in diff · esc close</div>
       </div>
     </div>
   );
@@ -638,13 +699,14 @@ function DiffView({ cwd, path }: { cwd: string; path: string }) {
   return <div ref={elRef} style={{ height: "100%", width: "100%" }} />;
 }
 
-function Cockpit({ diff, cwd, onRefresh, onClose }: { diff: GitDiff | null; cwd: string; onRefresh: () => void; onClose: () => void }) {
+function Cockpit({ diff, cwd, selected, onSelect, onRefresh, onClose }: { diff: GitDiff | null; cwd: string; selected: string | null; onSelect: (p: string | null) => void; onRefresh: () => void; onClose: () => void }) {
   const files = useMemo(() => (diff?.files || []).map(parsePorcelain), [diff]);
-  const [selected, setSelected] = useState<string | null>(null);
+  // Auto-pick the first changed file only when nothing is selected yet. A file
+  // opened via Ctrl+P (which may be unchanged, so not in this list) stays selected.
   useEffect(() => {
-    if (files.length && (!selected || !files.find((f) => f.path === selected))) setSelected(files[0].path);
-    if (!files.length) setSelected(null);
-  }, [files, selected]);
+    if (!selected && files.length) onSelect(files[0].path);
+  }, [files, selected, onSelect]);
+  const inList = !selected || files.some((f) => f.path === selected);
 
   return (
     <aside className="flex flex-col border-l border-surface-border" style={{ width: 520, flexShrink: 0, background: "var(--color-surface)" }}>
@@ -653,10 +715,16 @@ function Cockpit({ diff, cwd, onRefresh, onClose }: { diff: GitDiff | null; cwd:
         <div className="flex gap-1.5"><button className="cz-mini" onClick={onRefresh}>refresh</button><button className="cz-mini" onClick={onClose}>close ⌘J</button></div>
       </div>
       <div className="border-b border-surface-border" style={{ maxHeight: 150, overflowY: "auto" }}>
+        {selected && !inList && (
+          <button className="cz-diff-file cz-diff-file-sel" onClick={() => onSelect(selected)}>
+            <span className="font-bold" style={{ color: "var(--color-info)", width: 16, display: "inline-block" }}>◦</span>
+            <span className="truncate">{selected}</span>
+          </button>
+        )}
         {!diff || !diff.isRepo ? <div className="px-3 py-2 italic text-text-tertiary font-mono text-[11.5px]">not a git repo</div>
-          : files.length === 0 ? <div className="px-3 py-2 italic text-text-tertiary font-mono text-[11.5px]">working tree clean</div>
+          : files.length === 0 ? (!selected || inList) && <div className="px-3 py-2 italic text-text-tertiary font-mono text-[11.5px]">working tree clean</div>
           : files.map((f) => (
-            <button key={f.path} className={"cz-diff-file" + (selected === f.path ? " cz-diff-file-sel" : "")} onClick={() => setSelected(f.path)}>
+            <button key={f.path} className={"cz-diff-file" + (selected === f.path ? " cz-diff-file-sel" : "")} onClick={() => onSelect(f.path)}>
               <span className="font-bold" style={{ color: statusColor(f.status), width: 16, display: "inline-block" }}>{f.status}</span>
               <span className="truncate">{f.path}</span>
             </button>

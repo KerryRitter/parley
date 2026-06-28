@@ -250,6 +250,20 @@ body {
 
 /* folder explorer */
 .cz-overlay { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.5); backdrop-filter: blur(3px); display: grid; place-items: center; }
+.cz-overlay-top { align-items: start; padding-top: 14vh; }
+
+/* Ctrl+P file quick-open */
+.cz-fp { width: 560px; max-width: 92vw; max-height: 60vh; display: flex; flex-direction: column; background: var(--color-surface); border: 1px solid var(--color-surface-border); border-radius: 12px; box-shadow: 0 28px 70px -18px rgba(0,0,0,.75); overflow: hidden; animation: cz-rise-in .14s var(--ease-smooth) both; }
+.cz-fp-head { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--color-surface-border); }
+.cz-fp-head input { flex: 1; background: transparent; border: 0; outline: 0; color: var(--color-text); font-family: var(--font-mono); font-size: 13px; }
+.cz-fp-head input::placeholder { color: var(--color-text-tertiary); }
+.cz-fp-list { flex: 1; overflow-y: auto; padding: 4px; }
+.cz-fp-item { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 10px; border: 0; background: transparent; border-radius: 6px; cursor: pointer; text-align: left; }
+.cz-fp-sel { background: color-mix(in srgb, var(--color-primary) 12%, transparent); }
+.cz-fp-name { font-family: var(--font-mono); font-size: 12.5px; color: var(--color-text); flex-shrink: 0; }
+.cz-fp-dir { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cz-fp-empty { padding: 16px; text-align: center; color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 12px; }
+.cz-fp-foot { padding: 8px 14px; border-top: 1px solid var(--color-surface-border); color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 10.5px; }
 .cz-folder { width: 460px; max-height: 70vh; display: flex; flex-direction: column; background: var(--color-surface); border: 1px solid var(--color-surface-border); border-radius: 12px; box-shadow: 0 24px 60px -16px rgba(0,0,0,.7); overflow: hidden; }
 .cz-folder-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--color-surface-border); }
 .cz-folder-note { padding: 8px 14px; color: var(--color-text-secondary); border-bottom: 1px solid var(--color-surface-border); background: color-mix(in srgb, var(--color-primary) 8%, transparent); line-height: 1.4; }
