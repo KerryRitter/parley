@@ -2,7 +2,7 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Collapsible, CommandPalette, Input, Kbd, Popover, ScrollArea, Spinner, Switch } from "./cruz";
 import {
-  invoke, IS_TAURI, listDir, listFiles, listSlashCommands, gitHeadFile, readFile, onChatEvent, pickFolder, savePaste,
+  invoke, cancelChat, IS_TAURI, listDir, listFiles, listSlashCommands, gitHeadFile, readFile, onChatEvent, pickFolder, savePaste,
   type AgentInfo, type AgentList, type AgentUsage, type ChatEvent, type DirListing, type GitDiff, type Panelist, type SendReq,
 } from "./bridge";
 import { DEFAULT_PANEL, NEEDS_PROVIDER, PRESETS, color, display } from "./agents";
@@ -94,13 +94,13 @@ export function App() {
     <div className="flex flex-col h-screen">
       <div className="cz-tabstrip" data-tauri-drag-region>
         <div className="cz-tabstrip-pad" />
-        <span className="cz-brand"><span style={{ color: "var(--color-primary)" }}>⚖</span> parley</span>
+        <span className="cz-brand"><span className="cz-brand-mark">⚖</span>parley</span>
         <button className="cz-pill" onClick={() => openers.current[active]?.()} title="Open folder (active console)">📂 open</button>
         <div className="cz-tab-sep" />
         {tabs.map((t) => (
-          <div key={t.id} className={"cz-tab" + (t.id === active ? " cz-tab-active" : "")} onClick={() => setActive(t.id)}>
-            {busyMap[t.id] ? <span className="cz-tab-dot cz-dot-warm" style={{ background: "var(--color-warning)" }} /> : <span className="cz-tab-dot" style={{ background: "var(--color-text-tertiary)" }} />}
-            <span>{t.title}</span>
+          <div key={t.id} className={"cz-tab" + (t.id === active ? " cz-tab-active" : "")} onClick={() => setActive(t.id)} title={t.title}>
+            <span className={"cz-tab-dot" + (busyMap[t.id] ? " cz-dot-warm" : "")} style={{ background: busyMap[t.id] ? "var(--color-warning)" : t.id === active ? "var(--color-success)" : "var(--color-text-tertiary)" }} />
+            <span className="cz-tab-title">{t.title}</span>
             {tabs.length > 1 && <span className="cz-tab-x" onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}>×</span>}
           </div>
         ))}
@@ -267,6 +267,14 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
     finally { setBusy(false); setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, done: true } : m))); refreshUsage(); refreshDiff(); }
   }
 
+  // Kill the in-flight run for this chat (its live agent processes). The pending
+  // send_message resolves on the canceled path, so its finally clears busy/done.
+  function stop() {
+    if (!busy) return;
+    cancelChat(chatId).catch(() => {});
+    setMessages((prev) => prev.map((m) => (!m.done && m.role === "assistant" ? { ...m, status: "stopped" } : m)));
+  }
+
   const paletteItems = commands.map((c) => ({ id: c.key, group: ["fuse", "single", "clear", "cockpit", "open"].includes(c.key) ? "Actions" : "Primary agent", label: c.label, onSelect: c.run }));
 
   return (
@@ -321,7 +329,7 @@ function Console({ chatId, active, onBusy, onTitle, registerOpen }: { chatId: st
               </div>
             )}
           </div>
-          <Composer input={input} setInput={setInput} run={run} busy={busy} fuse={fuse} primary={primary} attachments={attachments} setAttachments={setAttachments}
+          <Composer input={input} setInput={setInput} run={run} stop={stop} busy={busy} fuse={fuse} primary={primary} attachments={attachments} setAttachments={setAttachments}
             slashCmds={slashCmds} fileSearch={(q) => listFiles(cwd || null, q)} history={history} histIdx={histIdx} inputRef={inputRef} />
         </main>
 
@@ -419,12 +427,12 @@ function FolderModal({ initial, onClose, onPick, onNative }: { initial: string; 
 // ---- composer --------------------------------------------------------------
 
 function Composer(props: {
-  input: string; setInput: (v: string) => void; run: () => void; busy: boolean; fuse: boolean; primary: string;
+  input: string; setInput: (v: string) => void; run: () => void; stop: () => void; busy: boolean; fuse: boolean; primary: string;
   attachments: Attachment[]; setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   slashCmds: string[]; fileSearch: (q: string) => Promise<string[]>;
   history: string[]; histIdx: React.MutableRefObject<number>; inputRef: React.RefObject<HTMLTextAreaElement>;
 }) {
-  const { input, setInput, run, busy, fuse, primary, attachments, setAttachments, slashCmds, fileSearch, history, histIdx, inputRef } = props;
+  const { input, setInput, run, stop, busy, fuse, primary, attachments, setAttachments, slashCmds, fileSearch, history, histIdx, inputRef } = props;
   const [sel, setSel] = useState(0);
   const [files, setFiles] = useState<string[]>([]);
 
@@ -467,6 +475,7 @@ function Composer(props: {
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick(menuItems[sel]); return; }
       if (e.key === "Escape") { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); (e.target as HTMLTextAreaElement).focus(); return; }
     }
+    if (e.key === "Escape" && busy) { e.preventDefault(); stop(); return; }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); return; }
     if (e.key === "ArrowUp" && history.length && (input === "" || histIdx.current >= 0)) { e.preventDefault(); histIdx.current = Math.min(histIdx.current + 1, history.length - 1); setInput(history[history.length - 1 - histIdx.current]); return; }
     if (e.key === "ArrowDown" && histIdx.current >= 0) { e.preventDefault(); histIdx.current -= 1; setInput(histIdx.current < 0 ? "" : history[history.length - 1 - histIdx.current]); return; }
@@ -492,7 +501,9 @@ function Composer(props: {
       <div className="cz-term">
         <span className="cz-caret" style={{ color: caret }}>{slashMode ? "/" : fileMode ? "@" : "❯"}</span>
         <textarea ref={inputRef} rows={1} value={input} placeholder={fuse ? "message the panel…   / command · @ file · paste image" : `message ${display(primary)}…   / command · @ file · paste image`} onChange={(e) => { setInput(e.target.value); grow(e.target); }} onKeyDown={onKeyDown} onPaste={onPaste} />
-        <button className="cz-run" disabled={busy || (!input.trim() && attachments.length === 0)} onClick={run}>{busy ? <Spinner size="xs" /> : <><span>run</span><Kbd>⏎</Kbd></>}</button>
+        {busy
+          ? <button className="cz-stop" onClick={stop} title="Stop run (Esc)"><span className="cz-stop-sq" /><span>stop</span><Kbd>esc</Kbd></button>
+          : <button className="cz-run" disabled={!input.trim() && attachments.length === 0} onClick={run}><span>run</span><Kbd>⏎</Kbd></button>}
       </div>
       <div className="text-[11px] text-text-tertiary mt-1.5 h-3 font-mono">{menuKind === "slash" ? "harness command — ↑↓ select · ⏎ insert" : menuKind === "file" ? "file ref — ↑↓ select · ⏎ insert" : ""}</div>
     </div>
@@ -509,7 +520,13 @@ function RailRow({ name, active, installed, open, onClick, usage }: { name: stri
 }
 
 function PromptLine({ text }: { text: string }) {
-  return <div className="flex gap-2 items-start pt-1"><span style={{ color: "var(--color-primary)" }}>❯</span><span className="whitespace-pre-wrap text-text">{text}</span></div>;
+  return (
+    <div className="cz-prompt flex gap-2 items-start pt-1">
+      <span style={{ color: "var(--color-primary)" }}>❯</span>
+      <span className="whitespace-pre-wrap text-text flex-1 min-w-0">{text}</span>
+      <CopyBtn text={text} />
+    </div>
+  );
 }
 
 function RunGroup({ m }: { m: Msg }) {
@@ -534,7 +551,7 @@ function RunGroup({ m }: { m: Msg }) {
           <div className="cz-panel-head">▾ panel · {panelPanes.length} agents</div>
           {panelPanes.map((key) => { const p = m.panes[key]; return (
             <Collapsible key={key} defaultOpen={false} trigger={
-              <div className="cz-agent-sum"><Dot agent={p.agent} size={7} warm={p.warm} /><span className="font-semibold" style={{ color: "var(--color-text)" }}>{label(key, p.agent)}</span>{p.warm && <span className="cz-warm-tag">warm</span>}<div className="flex-1" />{p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span><span style={{ color: p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === 0 ? "✓" : "✕"}</span></> : <Spinner size="xs" />}</div>
+              <div className="cz-agent-sum"><Dot agent={p.agent} size={7} warm={p.warm} /><span className="font-semibold" style={{ color: "var(--color-text)" }}>{label(key, p.agent)}</span>{p.warm && <span className="cz-warm-tag">warm</span>}<div className="flex-1" />{p.text && <CopyBtn text={p.text} />}{p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span><span style={{ color: p.code === -15 ? "var(--color-warning)" : p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === -15 ? "■" : p.code === 0 ? "✓" : "✕"}</span></> : <Spinner size="xs" />}</div>
             }>
               <div className="cz-run-body" dangerouslySetInnerHTML={renderText(p.text || "…")} />
               {p.cmd && <div className="cz-run-cmd">$ {p.cmd}</div>}
@@ -556,7 +573,7 @@ function RunBlock({ p, title, fused = false, auto = false }: { p: Pane; title: s
         {p.warm ? <span className="cz-warm-tag">warm · resumed</span> : (!fused && <span className="cz-cold-tag">new session</span>)}
         <div className="flex-1" />
         {p.text && <CopyBtn text={p.text} />}
-        {p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span><span style={{ color: p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === 0 ? "✓ exit 0" : `✕ exit ${p.code ?? 1}`}</span></> : <Spinner size="xs" />}
+        {p.done ? <><span className="text-text-tertiary tabular-nums">{fmtMs(p.ms)}</span>{p.code === -15 ? <span style={{ color: "var(--color-warning)" }}>■ stopped</span> : <span style={{ color: p.code === 0 ? "var(--color-success)" : "var(--color-danger)" }}>{p.code === 0 ? "✓ exit 0" : `✕ exit ${p.code ?? 1}`}</span>}</> : <Spinner size="xs" />}
       </div>
       <div className={"cz-run-body" + (fused ? " cz-run-fused" : "")}>
         {p.text ? <span dangerouslySetInnerHTML={renderText(p.text)} /> : (!p.done && <Typing />)}

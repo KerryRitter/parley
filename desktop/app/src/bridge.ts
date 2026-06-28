@@ -51,6 +51,10 @@ export interface DirListing { path: string; parent: string | null; dirs: DirEntr
 export function listDir(path: string | null): Promise<DirListing> {
   return invoke<DirListing>("list_dir", { path });
 }
+/// Kill a chat's in-flight run (its live agent processes).
+export function cancelChat(chatId: string): Promise<void> {
+  return invoke<void>("cancel_chat", { chatId });
+}
 export function listSlashCommands(cwd: string | null, harness: string): Promise<string[]> {
   return invoke<string[]>("list_slash_commands", { cwd, harness });
 }
@@ -118,6 +122,7 @@ export async function savePaste(name: string, bytes: Uint8Array): Promise<string
 
 const seen = new Set<string>();
 const usage: Record<string, AgentUsage> = {};
+const canceledChats = new Set<string>();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const SAMPLE: Record<string, string[]> = {
@@ -150,6 +155,10 @@ async function streamRaw(req: SendReq, pane: string, agent: string, lines: strin
   dispatch({ chatId: req.chatId, msgId: req.msgId, pane, kind: "start", agent, warm, cmd });
   for (const ln of lines) {
     await sleep(85);
+    if (canceledChats.has(req.chatId)) {
+      dispatch({ chatId: req.chatId, msgId: req.msgId, pane, kind: "done", code: -15, ms: 0 });
+      return;
+    }
     dispatch({ chatId: req.chatId, msgId: req.msgId, pane, kind: "chunk", text: ln + "\n" });
   }
   await sleep(70);
@@ -170,6 +179,7 @@ async function streamPaneFor(req: SendReq, p: Panelist, lines: string[], warm: b
 }
 
 async function mockSend(req: SendReq) {
+  canceledChats.delete(req.chatId); // fresh run
   if (req.target === "fuse") {
     const panel: Panelist[] = req.panel.length
       ? req.panel
@@ -183,6 +193,7 @@ async function mockSend(req: SendReq) {
         return streamPaneFor(req, p, lines, seen.has(slot)).then(() => seen.add(slot));
       })
     );
+    if (canceledChats.has(req.chatId)) return; // killed mid-panel: no fusion
     const judge = req.judge || "claude";
     const fused = [
       "CONSENSUS",
@@ -224,6 +235,9 @@ async function mockInvoke(cmd: string, args?: Record<string, unknown>): Promise<
       } satisfies AgentList;
     case "send_message":
       await mockSend((args as { req: SendReq }).req);
+      return null;
+    case "cancel_chat":
+      canceledChats.add((args as { chatId: string }).chatId);
       return null;
     case "usage_stats":
       return Object.values(usage).sort((a, b) => b.calls - a.calls);

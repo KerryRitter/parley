@@ -20,7 +20,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -41,7 +41,77 @@ const DEFAULT_JUDGE: &str = "claude";
 #[derive(Default)]
 struct AppState {
     chats: Mutex<HashMap<String, ChatState>>,
+    /// In-flight runs per chat, so a chat can be killed mid-processing.
+    runs: Mutex<HashMap<String, RunState>>,
 }
+
+/// Tracks the live child processes of one chat's current turn. Children are spawned
+/// as process-group leaders, so we cancel by signalling the whole group (which also
+/// reaps any grandchildren, e.g. `par solve` spawning the underlying agent).
+#[derive(Default)]
+struct RunState {
+    pids: HashSet<u32>,
+    canceled: bool,
+}
+
+/// Begin a fresh run for a chat (clears any stale cancel flag/pids).
+fn run_begin(state: &AppState, chat_id: &str) {
+    if let Ok(mut runs) = state.runs.lock() {
+        runs.insert(chat_id.to_string(), RunState::default());
+    }
+}
+
+/// Has this chat's current run been canceled?
+fn run_canceled(state: &AppState, chat_id: &str) -> bool {
+    state
+        .runs
+        .lock()
+        .map(|r| r.get(chat_id).map(|s| s.canceled).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+/// Register a freshly spawned child pid. Returns true if the run was already
+/// canceled (caller should kill it immediately and bail).
+fn run_register(state: &AppState, chat_id: &str, pid: u32) -> bool {
+    if let Ok(mut runs) = state.runs.lock() {
+        let s = runs.entry(chat_id.to_string()).or_default();
+        s.pids.insert(pid);
+        return s.canceled;
+    }
+    false
+}
+
+fn run_unregister(state: &AppState, chat_id: &str, pid: u32) {
+    if let Ok(mut runs) = state.runs.lock() {
+        if let Some(s) = runs.get_mut(chat_id) {
+            s.pids.remove(&pid);
+        }
+    }
+}
+
+/// Signal a process group (the child is its own group leader, so pgid == pid).
+fn kill_group(pid: u32, sig: i32) {
+    #[cfg(unix)]
+    unsafe {
+        libc::killpg(pid as libc::pid_t, sig);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, sig);
+    }
+}
+
+#[cfg(unix)]
+const SIG_TERM: i32 = libc::SIGTERM;
+#[cfg(unix)]
+const SIG_KILL: i32 = libc::SIGKILL;
+#[cfg(not(unix))]
+const SIG_TERM: i32 = 15;
+#[cfg(not(unix))]
+const SIG_KILL: i32 = 9;
+
+/// Sentinel "done" code the UI renders as "stopped" (a user-killed run).
+const CODE_STOPPED: i32 = -15;
 
 #[derive(Default)]
 struct ChatState {
@@ -405,15 +475,30 @@ async fn stream_command(
         },
     );
 
-    let mut child = Command::new(&inv.command)
-        .args(&inv.args)
+    let mut cmd = Command::new(&inv.command);
+    cmd.args(&inv.args)
         .envs(&inv.env)
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    // Own process group so cancel can signal the whole tree (incl. any agent that
+    // `par` itself spawns), not just the direct child.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to start {}: {e}", inv.command))?;
+
+    // Register the live child so `cancel_chat` can kill it. If the run was already
+    // canceled before we got here, kill it now.
+    let state = app.state::<AppState>();
+    let pid = child.id();
+    if let Some(pid) = pid {
+        if run_register(&state, chat_id, pid) {
+            kill_group(pid, SIG_KILL);
+        }
+    }
 
     let stdout = child.stdout.take().ok_or("no stdout handle")?;
     let stderr = child.stderr.take().ok_or("no stderr handle")?;
@@ -475,6 +560,16 @@ async fn stream_command(
     let _ = err_task.await;
     let status = child.wait().await.map_err(|e| e.to_string())?;
     let ms = started.elapsed().as_millis();
+    if let Some(pid) = pid {
+        run_unregister(&state, chat_id, pid);
+    }
+    // A canceled run was killed by a signal (no exit code); flag it with a sentinel
+    // so the UI shows "stopped" rather than a scary "exit 1".
+    let code = if run_canceled(&state, chat_id) {
+        Some(CODE_STOPPED)
+    } else {
+        status.code()
+    };
 
     emit(
         app,
@@ -486,7 +581,7 @@ async fn stream_command(
             text: None,
             agent: None,
             warm: None,
-            code: status.code(),
+            code,
             ms: Some(ms),
             cmd: None,
         },
@@ -567,6 +662,7 @@ async fn send_message(
     req: SendReq,
 ) -> Result<(), String> {
     let cwd = resolve_cwd(&req.cwd);
+    run_begin(&state, &req.chat_id);
 
     // `solve` runs `par solve` end-to-end (it owns route+escalate); it can switch
     // agents mid-run, so it isn't pinned. Feed it the full transcript as context.
@@ -599,6 +695,9 @@ async fn send_message(
             &cwd,
         )
         .await?;
+        if run_canceled(&state, &req.chat_id) {
+            return Ok(());
+        }
         push_assistant(&state, &req.chat_id, "solve", &text, &[])?;
         return Ok(());
     }
@@ -714,6 +813,12 @@ async fn send_message(
         if let Ok(Some(r)) = h.await {
             results.push(r);
         }
+    }
+
+    // Killed mid-run: don't synthesize a fused answer or commit warm pins from a
+    // partial turn.
+    if run_canceled(&state, &req.chat_id) {
+        return Ok(());
     }
 
     if req.target == "fuse" {
@@ -969,6 +1074,23 @@ async fn git_discard(cwd: Option<String>) -> Result<(), String> {
 fn reset_chat(state: State<'_, AppState>, chat_id: String) -> Result<(), String> {
     let mut chats = state.chats.lock().map_err(|_| "state lock poisoned")?;
     chats.remove(&chat_id);
+    Ok(())
+}
+
+/// Kill the chat's in-flight run: mark it canceled and signal every live child's
+/// process group (TERM then KILL). Safe to call when nothing is running.
+#[tauri::command]
+fn cancel_chat(state: State<'_, AppState>, chat_id: String) -> Result<(), String> {
+    let pids: Vec<u32> = {
+        let mut runs = state.runs.lock().map_err(|_| "state lock poisoned")?;
+        let s = runs.entry(chat_id).or_default();
+        s.canceled = true;
+        s.pids.iter().copied().collect()
+    };
+    for pid in pids {
+        kill_group(pid, SIG_TERM);
+        kill_group(pid, SIG_KILL);
+    }
     Ok(())
 }
 
@@ -1259,6 +1381,7 @@ fn main() {
             git_diff,
             git_discard,
             reset_chat,
+            cancel_chat,
             save_paste,
             list_dir,
             list_slash_commands,
