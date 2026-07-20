@@ -74,18 +74,30 @@ The result: your automation describes *intent*, not which agent is wired up toda
 
 ## Install
 
-One command:
+One command — grabs a prebuilt binary, no Rust toolchain needed.
+
+**macOS / Linux:**
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/KerryRitter/parley/main/install.sh | sh
 ```
 
-This installs `par` into `~/.local/bin` (plus an `agent-router` alias). Make sure that directory is on your `PATH`:
+Installs `par` into `~/.local/bin` (plus an `agent-router` alias). Make sure that directory is on your `PATH`:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 par --version          # verify
 ```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/KerryRitter/parley/main/install.ps1 | iex
+```
+
+Installs `par.exe` into `%LOCALAPPDATA%\Programs\par` and adds it to your user `PATH`. Restart the terminal, then `par --version`.
+
+Prebuilt binaries cover Linux (x86_64, aarch64), macOS (Intel + Apple Silicon), and Windows (x86_64). The macOS/Linux script falls back to a source build only if no prebuilt binary matches your platform.
 
 > `par` routes to agent CLIs — it does not install them for you automatically. Install the agents you want with [`par install`](#install-agent-clis), or bring your own.
 
@@ -116,7 +128,7 @@ cargo install --git https://github.com/KerryRitter/parley.git --branch main --fo
 ... | sh -s -- --no-agent-router              # skip the agent-router alias
 ```
 
-The script installs a prebuilt release binary for your platform when available, and falls back to a source build otherwise. (Release-binary and Homebrew distribution are planned; see [Release Plan](#release-plan).)
+The script installs a prebuilt release binary for your platform when available, and falls back to a source build otherwise.
 
 ---
 
@@ -581,17 +593,21 @@ impl Harness for ExampleHarness {
 
 Working infrastructure for local automation.
 
-**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run command preview · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · panel fusion (`par fuse` + mcp `fuse` tool) · captured-run watchdog · mcp on/off/status · stdio MCP server · validating setup script.
+**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run command preview · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · panel fusion (`par fuse` + mcp `fuse` tool) · captured-run watchdog · mcp on/off/status · stdio MCP server · validating setup script · prebuilt release binaries for Linux/macOS/Windows via GitHub Actions (`par-<target>.tar.gz` / `.zip` + `.sha256`).
 
-**Not yet:** GitHub Actions release builds · Homebrew formula · end-to-end smoke tests against every vendor CLI · a stable semver contract per agent mapping.
+**Not yet:** Homebrew formula · end-to-end smoke tests against every vendor CLI · a stable semver contract per agent mapping.
 
 ### Release plan
 
-1. `scripts/setup.sh`.
-2. Smoke-test locally available CLIs with `--dry-run`.
-3. CI: `cargo fmt --check`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, and release binaries for Linux/macOS/Windows (`par-<target>.tar.gz` / `.zip`).
-4. Add archive checksums, publish a GitHub release.
-5. Add a Homebrew tap once artifact names are stable.
+Push a `v*` tag → `.github/workflows/release.yml` builds `par` for every target and attaches the archives (with SHA-256 sums) to the tag's GitHub Release, which `install.sh` / `install.ps1` then fetch.
+
+```sh
+# cut a release
+scripts/setup.sh                 # fmt, test, clippy -D warnings
+git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+A Homebrew tap can follow once artifact names are stable.
 
 ---
 
