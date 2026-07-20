@@ -17,7 +17,25 @@ permissions:
   contents: write
 
 jobs:
+  # taiki-e/upload-rust-binary-action only *uploads* to a release — it does not
+  # create one. Create it once up front so every matrix job has a target to
+  # attach its archive to.
+  create-release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Create the release if it doesn't exist
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          fi
+
   build:
+    needs: create-release
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
