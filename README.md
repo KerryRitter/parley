@@ -28,8 +28,6 @@ Parley is **first-class both ways** — a CLI you drive, and an MCP server your 
 | Capability | **CLI** — *you* run it | **MCP** — *your agent* calls it |
 | --- | --- | --- |
 | **Fuse** a panel into one answer | `par fuse "design a rate limiter"` | `fuse` tool |
-| **Auto-route** to the best agent | `par route "…"` · `par -h auto -p "…"` | — |
-| **Solve** with auto-escalation | `par solve "…"` | *(compose via `ask_agent` + `fuse`)* |
 | **Ask** another agent, with context | `par ask -h g -p "…" --context-from cl` | `ask_agent` tool |
 | **Resume** any agent's session here | `par resume` | `list_sessions` · `get_last_session` · `resume_command` |
 | **Converse** — two agents, multi-turn | `par converse --a cl --b g -p "…"` | *(compose via `ask_agent`)* |
@@ -46,8 +44,6 @@ par mcp connect -h cl                                # registers the MCP server 
 ```
 
 Parley is a small, dependency-free Rust CLI (binary: `par`). It never calls a model API itself — it drives the agent CLIs you already have, so your auth, models, and permissions stay with them. The MCP server exposes the very same operations as tools, so nothing is locked to one surface.
-
-> **Prefer a window to a terminal?** [**Parley Desktop**](desktop/README.md) is a small Tauri chat app over the same engine — one chat, switch between Auto / Fuse / Solve / any single agent per message, with live-streamed panels. It's a thin shell that drives `par`, so it inherits each agent's own auth, subscription, and caching.
 
 ## Why
 
@@ -130,10 +126,6 @@ The script installs a prebuilt release binary for your platform when available, 
 | --- | --- |
 | [`par -p "..."`](#run-a-prompt) | Route a prompt to any agent, with one shared flag set |
 | [`par fuse "..."`](#fuse--a-panel-of-agents-one-answer) | Run a panel of agents in parallel; a judge fuses one answer (also an MCP tool) |
-| [`par route "..."`](#route--auto-pick-the-best-agent-for-a-prompt) | Pick the best agent for a prompt — and explain why (`-h auto` routes then runs) |
-| [`par solve "..."`](#solve--auto-escalate-a-stuck-agent-to-a-panel) | Route to one agent, then auto-escalate to a `fuse` panel if it gets stuck |
-| [`par stats`](#stats--learn-routing-from-your-own-runs) | Local per-(task, agent) scoreboard that learns better routing over time |
-| [`par commands install`](#slash-commands--statusline) | Generate `/fuse` · `/solve` · `/route` slash commands into your agents |
 | [`par default <agent>`](#set-a-default-agent) | Pick the default agent (and options) for this machine |
 | [`par install <agent>`](#install-agent-clis) | Install a downstream agent CLI |
 | [`par shims install`](#shims) | Create `claudey` / `codexy` one-shot shortcuts |
@@ -273,123 +265,24 @@ Panelists run **concurrently**, so wall-clock ≈ the slowest agent + the judge,
 
 **Fuse selectively** — it's escalation, not autopilot. Reach for it on the calls where being wrong is expensive (design, security, migrations), and use a *diverse* panel (different vendors, not three of the same model). The [Fusion Playbook](docs/fusion-playbook.md) covers when to fuse, how to pick the panel, and the debate / wider-deeper patterns that stack on top.
 
-Pass `--panel auto` to let the router pick a diverse panel for the prompt:
+Pass `--panel auto` as shorthand for the default diverse trio:
 
 ```sh
-par fuse --panel auto -p "is this migration safe to run on a live DB?"
+par fuse --panel auto -p "is this migration safe to run on a live DB?"   # same as no --panel
 ```
 
----
+### Meta-harness — `fuse` as an agent
 
-## Route — auto-pick the best agent for a prompt
-
-You shouldn't have to remember which agent is best at what. `par route` reads a prompt, classifies the task (debug, code, refactor, test, review, architecture, explain), and scores every agent against a `task × agent` table — then tells you who should answer, and why.
+`fuse` is a **meta-harness**: a harness that calls back into `par` instead of driving one agent CLI. Because every surface (panelists, conversation participants, `ask`, the run path) turns a harness into a command and spawns it, `fuse` composes *anywhere a harness is accepted* — for free:
 
 ```sh
-par route "fix the failing test that crashes on startup"   # → codex (task: debug)
-par route "design a scalable multi-tenant rate limiter"    # → gemini / claude (task: architecture)
-par route "..." --bias 1.0                                 # 0 = cheapest/fastest, 1 = strongest (default 0.7)
-par route "..." --json                                     # decision + every candidate's score
-```
-
-```text
-task class : debug
-→ route to : codex
-  reason   : prompt looks like 'debug'; codex ranks highest (quality 0.92, blend 0.81 at bias 0.70)
-  panel    : codex, cursor, gemini
-
-  AGENT        FAMILY      QUALITY    BLEND  INSTALLED
-  codex        openai         0.92     0.81  yes
-  cursor       cursor         0.86     0.81  yes
-  claude       anthropic      0.90     0.80  yes
-  ...
-```
-
-Then **route and run** in one step:
-
-```sh
-par -h auto -p "refactor this module and simplify it"      # picks the agent, runs it
-par default auto                                           # make auto-routing the default
-```
-
-**How it works.** This is the [workweave/router](https://github.com/workweave/router) routing brain, ported to a zero-dependency CLI: their two-phase design — heavy offline training → a tiny frozen table → runtime is pure arithmetic (score every candidate, argmax) — transfers cleanly; only their on-box neural embedder doesn't (it needs ONNX + a 100 MB model). So `par` swaps the embedder for a dependency-free keyword classifier and blends each agent's quality against a speed/cost axis with a single `quality_bias` dial — exactly the router's `quality·α + (1−cost)·(1−α)` shape. The quality numbers are a hand-seeded starting point (the same cold-start fidelity the router gets from public benchmarks); [`par stats`](#stats--learn-routing-from-your-own-runs) surfaces your real outcomes so the table can be tuned over time.
-
-The picker only considers agents whose CLI is actually installed, and never silently picks wrong: with no installable candidate it falls back to your default agent.
-
-### Meta-harnesses — agents made of agents
-
-`auto`, `fuse`, and `solve` are **meta-harnesses**: harnesses that call back into `par` instead of driving one agent CLI. Because every surface (panelists, conversation participants, `ask`, the run path) turns a harness into a command and spawns it, the meta-harnesses compose *everywhere a harness is accepted* — for free:
-
-```sh
-par -h auto -p "..."                  # route to the best agent
-par fuse --panel auto,auto,auto       # three independently-routed panelists
 par converse --a fuse --b claude      # a whole panel debates a single agent
-par fuse --panel claude,solve         # a panelist that self-escalates if it stalls
 par ask -h fuse -p "..."              # ask "the panel" as if it were one agent
-par fuse --judge solve "..."          # the judge itself routes + escalates
 ```
 
-`auto` resolves the router and delegates to the chosen real agent in-process (no extra spawn); `fuse`/`solve` recurse into `par <sub>`. A depth counter in `PARLEY_META_DEPTH` (inherited across the recursive spawns) caps nesting so `--panel fuse,fuse,…` can't fork-bomb. Yes, it's turtles — but bounded turtles.
+`fuse` recurses into `par fuse`. A depth counter in `PARLEY_META_DEPTH` (inherited across the recursive spawns) caps nesting so `--panel fuse,fuse,…` can't fork-bomb.
 
----
-
-## Solve — auto-escalate a stuck agent to a panel
-
-`par solve` is fusion-as-escalation, automatic. It routes your prompt to a single agent (cheap, fast), watches the result, and **only convenes a panel if that agent gets stuck** — a degenerate (near-empty) reply, an error/failure marker in the output (a traceback, a red test), a non-zero exit, a watchdog timeout, or — for code-shaped tasks — leaving the working tree untouched. On any of those, it escalates to a `fuse` panel seeded with the failed attempt, so the panel knows what already didn't work.
-
-```sh
-par solve "add a --json flag to the export command"        # one agent; panel only if it stalls
-par solve "..." -h co                                      # force the first agent
-par solve "..." --panel cl,g --judge co                    # force the escalation panel + judge
-par solve "..." --shadow                                   # detect-only: report what WOULD escalate
-```
-
-This is the [router's loop-escalation idea](https://github.com/workweave/router), made stronger: the router can only swap to a bigger *model*; `par` swaps *strategy* — a single agent that fails escalates to a whole panel. The detection heuristics (degenerate reply, error-marker scan, the "no file change = no progress" oracle from `git`) are the portable distillation of the router's loop- and spiral-detectors. `--shadow` mirrors its shadow-mode-first discipline: measure precision on your real runs before letting it act.
-
-`par converse` gets the same loop sense — if two agents collapse onto the same answer, the conversation stops early instead of burning the turn budget.
-
----
-
-## Stats — learn routing from your own runs
-
-Every `par` run appends one line to a local JSONL log (`~/.config/par/telemetry.jsonl`) — which agent ran what kind of task, and how it went (success, latency, whether it stalled). `par stats` turns that into a scoreboard, the substrate for tuning the routing table to *your* agents and *your* work.
-
-```sh
-par stats                 # per-(task, agent) success-rate + latency  (alias: par gain)
-par stats --json          # machine-readable
-par rate + great answer   # thumbs-up the last run;  par rate - too slow  for thumbs-down
-```
-
-```text
-Parley stats — 142 runs, 88% ok, 12 👍 / 3 👎
-  TASK           AGENT       RUNS    OK%       AVG
-  code           codex         41    95%     8.4s
-  architecture   claude        22    91%    14.1s
-  debug          gemini        18    72%     6.2s
-```
-
-This is the local, server-free version of the router's telemetry + feedback loop. **Privacy:** the prompt text is never stored — only its length and a non-reversible fingerprint. Opt into raw-prompt capture with `PARLEY_TELEMETRY_PROMPTS=1`, or disable telemetry entirely with `PARLEY_TELEMETRY=off`. Nothing ever leaves your machine. `par fuse`'s judge already picks a winner per prompt — a free quality label the scoreboard can accumulate.
-
----
-
-## Slash commands & statusline
-
-Generate Parley slash commands into the agents you drive, so `/fuse`, `/solve`, and `/route` are one keystroke away from inside Claude Code or Codex:
-
-```sh
-par commands install -h cl       # writes /fuse, /solve, /route into ./.claude/commands
-par commands install -h co       # ...or into ./.codex/prompts
-par commands install -h cl --dir path/to/project --dry-run
-```
-
-Each file carries a `par-generated` marker (the same contract as `par convert`), so re-running replaces only its own output, never a hand-authored command. Files that would overwrite a symlink are refused — `par` writes safely into project directories.
-
-A status-line badge for Claude Code, with no daemon or sidecar:
-
-```jsonc
-// ~/.claude/settings.json
-"statusLine": { "type": "command", "command": "par statusline" }
-```
+`par converse` also has a loop sense — if two agents collapse onto the same answer, the conversation stops early instead of burning the turn budget.
 
 ---
 
@@ -637,12 +530,7 @@ src/
   ask.rs               agent-to-agent calls (headless run + transcript context injection)
   converse.rs          multi-turn two-agent conversation loop (+ loop detection)
   fuse.rs              panel fusion engine — parallel panel + judge (`par fuse` and the mcp `fuse` tool)
-  route.rs             auto-route — task classifier + `class × agent` table (`par route`, `-h auto`)
-  solve.rs             route then auto-escalate a stuck agent to a panel (`par solve`)
-  signals.rs           pure outcome heuristics (degenerate / error-marker / no-progress / loop)
-  telemetry.rs         local append-only JSONL + `par stats` / `par rate`
-  commands.rs          generate /fuse · /solve · /route slash commands (`par commands install`)
-  statusline.rs        Claude Code status-line badge (`par statusline`)
+  signals.rs           pure loop-detection heuristic for `par converse`
   fsx.rs               symlink-safe file writes for project-directory config
   mcp.rs               stdio MCP server (resume tools + ask_agent + fuse) + `mcp connect` / on/off/status
   harness/             per-agent adapters (claude, codex, cursor, gemini, goose,
@@ -693,7 +581,7 @@ impl Harness for ExampleHarness {
 
 Working infrastructure for local automation.
 
-**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run routing · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · panel fusion (`par fuse` + mcp `fuse` tool) · auto-routing (`par route` / `-h auto`) · auto-escalation (`par solve`) · local telemetry + scoreboard (`par stats`) · generated slash commands + statusline · captured-run watchdog · mcp on/off/status · stdio MCP server · validating setup script.
+**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run command preview · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · panel fusion (`par fuse` + mcp `fuse` tool) · captured-run watchdog · mcp on/off/status · stdio MCP server · validating setup script.
 
 **Not yet:** GitHub Actions release builds · Homebrew formula · end-to-end smoke tests against every vendor CLI · a stable semver contract per agent mapping.
 
@@ -709,9 +597,7 @@ Working infrastructure for local automation.
 
 ## Security & privacy
 
-`par` does not inspect or redact prompt content. Anything passed via stdin or `-p` is forwarded to the selected agent, which may send it to its configured provider.
-
-**Local telemetry** is on by default and stays entirely on your machine (`~/.config/par/telemetry.jsonl`). It records *which* agent ran *what kind* of task and how it went — never the prompt text, only its length and a non-reversible fingerprint. Opt into raw-prompt capture with `PARLEY_TELEMETRY_PROMPTS=1`, or disable it with `PARLEY_TELEMETRY=off`. It exists only to power `par stats` and better routing; nothing is uploaded.
+`par` does not inspect or redact prompt content. Anything passed via stdin or `-p` is forwarded to the selected agent, which may send it to its configured provider. `par` itself makes no network calls and keeps no logs — it only starts the local agent CLIs you already have.
 
 **Yolo (permission bypass) is on by default** — each run adds the agent's bypass flag unless you pass `--no-yolo` or set `PARLEY_YOLO=false`. This favors hands-off automation over sandboxing; opt out for untrusted prompts or sensitive directories. Use `--dry-run` to validate automation that may include secrets before running it.
 

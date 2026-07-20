@@ -1,6 +1,5 @@
 mod ask;
 mod cli;
-mod commands;
 mod config;
 mod converse;
 mod convert;
@@ -12,20 +11,15 @@ mod json;
 mod mcp;
 mod model;
 mod process;
-mod route;
 mod session;
 mod signals;
-mod solve;
-mod statusline;
-mod telemetry;
 
 use std::env;
 use std::io::{self, IsTerminal, Read, Write};
-use std::time::Instant;
 
 use cli::{parse_args, usage, CliAction};
 use config::DefaultConfig;
-use harness::{normalize_harness, HarnessFactory, Request};
+use harness::{HarnessFactory, Request};
 use installer::{run_install, run_update};
 use process::{run_invocation, run_invocation_status};
 
@@ -57,41 +51,15 @@ fn run() -> Result<(), String> {
         CliAction::Ask(options) => ask::run_cli(options),
         CliAction::Converse(options) => converse::run_cli(options),
         CliAction::Fuse(options) => fuse::run_cli(options),
-        CliAction::Solve(options) => solve::run_cli(*options),
-        CliAction::Route(options) => route::run_cli(
-            &options.prompt,
-            options.bias,
-            options.panel_size,
-            options.json,
-        ),
-        CliAction::Stats(options) => telemetry::run_stats(options.json),
-        CliAction::Rate(options) => telemetry::run_rate(options.sign, options.note),
-        CliAction::Statusline => statusline::run(),
-        CliAction::Commands(options) => commands::run(options),
         CliAction::Mcp(options) => mcp::dispatch(options),
         CliAction::Run(options) => run_prompt(*options),
     }
 }
 
-/// The `par -p "..."` path: build the routed invocation, optionally auto-routing
-/// the agent, then run it (recording telemetry around the run).
+/// The `par -p "..."` path: build the invocation for the chosen agent and run it.
 fn run_prompt(options: cli::CliOptions) -> Result<(), String> {
     let stdin_text = read_stdin_if_piped()?;
-    let mut request = Request::from_options(options, stdin_text)?;
-
-    // Auto-route: `-h auto` picks the best agent for the prompt. With no prompt
-    // to classify (interactive launch), fall back to the default agent.
-    let mut route_reason = None;
-    if request.harness == "auto" {
-        match request.prompt.as_deref() {
-            Some(prompt) => {
-                let (harness, reason) = route::resolve_harness("auto", prompt, None);
-                request.harness = normalize_harness(&harness);
-                route_reason = reason;
-            }
-            None => request.harness = "claude".to_string(),
-        }
-    }
+    let request = Request::from_options(options, stdin_text)?;
 
     let factory = HarnessFactory::default();
     let harness = factory.create(&request.harness)?;
@@ -102,33 +70,16 @@ fn run_prompt(options: cli::CliOptions) -> Result<(), String> {
         return Ok(());
     }
 
-    if let Some(reason) = &route_reason {
-        eprintln!("⚖  auto-route → {} — {reason}", request.harness);
-    }
-
     let inherit_stdin = request.prompt.is_none();
     let cwd = request.cwd.clone();
 
-    // With a prompt we can classify the task and time the run for telemetry;
-    // without one (interactive launch) just hand off.
-    let Some(prompt) = request.prompt.clone() else {
+    // With a prompt, capture the child's status and exit with it; without one
+    // (interactive launch) just hand off.
+    if request.prompt.is_none() {
         return run_invocation(invocation, cwd.as_deref(), inherit_stdin);
-    };
-
-    let class = route::classify(&prompt);
-    let started = Instant::now();
-    let status = run_invocation_status(invocation, cwd.as_deref(), inherit_stdin)?;
-    telemetry::Event {
-        cmd: "run",
-        harness: Some(request.harness.clone()),
-        task_class: Some(class.name().to_string()),
-        prompt: Some(prompt),
-        ok: status.success(),
-        duration_ms: started.elapsed().as_millis(),
-        reason: route_reason,
-        ..telemetry::Event::default()
     }
-    .record();
+
+    let status = run_invocation_status(invocation, cwd.as_deref(), inherit_stdin)?;
     std::process::exit(status.code().unwrap_or(1));
 }
 

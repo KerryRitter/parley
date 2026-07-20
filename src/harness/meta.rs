@@ -1,69 +1,34 @@
-//! Meta-harnesses — harnesses that, instead of driving one agent CLI, call back
+//! Meta-harness — a harness that, instead of driving one agent CLI, calls back
 //! into `par` itself. Because every surface (`fuse` panelists, `converse`
 //! participants, `ask`, the run path) turns a harness into an `Invocation` and
-//! spawns it, registering these as ordinary harnesses makes them compose
+//! spawns it, registering this as an ordinary harness makes it compose
 //! *everywhere* for free:
 //!
 //! ```text
-//! par -h auto -p "..."                 # route to the best agent
-//! par fuse --panel auto,auto,auto      # three independently-routed panelists
 //! par converse --a fuse --b claude     # a whole panel debates one agent
-//! par fuse --panel claude,solve        # a panelist that self-escalates
 //! par ask -h fuse -p "..."             # ask "the panel" as if it were one agent
 //! ```
 //!
-//! `auto` resolves the router and **delegates** to the chosen real harness in
-//! the same process (no extra spawn). `fuse` / `solve` genuinely need to run a
-//! `par` subcommand, so they emit a recursive `par <sub>` invocation that the
-//! capture path runs and reads back. A depth counter carried in the
-//! `PARLEY_META_DEPTH` env var (inherited across the recursive spawns) caps the
-//! nesting so `--panel fuse,fuse,...` can't fork-bomb.
+//! `fuse` genuinely needs to run a `par` subcommand, so it emits a recursive
+//! `par fuse` invocation that the capture path runs and reads back. A depth
+//! counter carried in the `PARLEY_META_DEPTH` env var (inherited across the
+//! recursive spawns) caps the nesting so `--panel fuse,fuse,...` can't
+//! fork-bomb.
 
 use std::env;
 
-use super::{is_meta, normalize_harness, self_bin, Harness, HarnessFactory, Invocation, Request};
-use crate::route;
+use super::{self_bin, Harness, Invocation, Request};
 
 const META_DEPTH_ENV: &str = "PARLEY_META_DEPTH";
 const MAX_META_DEPTH: u32 = 4;
-
-pub(crate) fn auto() -> Box<dyn Harness> {
-    Box::new(AutoHarness)
-}
 
 pub(crate) fn fuse() -> Box<dyn Harness> {
     Box::new(SubHarness { sub: "fuse" })
 }
 
-pub(crate) fn solve() -> Box<dyn Harness> {
-    Box::new(SubHarness { sub: "solve" })
-}
-
-/// `auto` — route the prompt to the best real agent and build *its* invocation
-/// directly, so no extra process is spawned.
-struct AutoHarness;
-
-impl Harness for AutoHarness {
-    fn build(&self, request: &Request) -> Result<Invocation, String> {
-        let prompt = request.prompt.as_deref().unwrap_or_default();
-        let (chosen, _reason) = route::resolve_harness("auto", prompt, None);
-        let chosen = normalize_harness(&chosen);
-        // The router only ever picks real agents; guard anyway so a future
-        // table change can't create an auto→meta→auto cycle.
-        if is_meta(&chosen) {
-            return Err(format!(
-                "auto routed to meta-harness \"{chosen}\"; refusing"
-            ));
-        }
-        let mut delegated = request.clone();
-        delegated.harness = chosen.clone();
-        HarnessFactory::default().create(&chosen)?.build(&delegated)
-    }
-}
-
-/// `fuse` / `solve` — recurse into `par <sub> -p <prompt>`. The capture path
-/// runs it and reads the fused/solved answer back, so the meta behaves like a
-/// single agent everywhere a harness is accepted.
+/// `fuse` — recurse into `par fuse -p <prompt>`. The capture path runs it and
+/// reads the fused answer back, so the meta behaves like a single agent
+/// everywhere a harness is accepted.
 struct SubHarness {
     sub: &'static str,
 }
@@ -105,6 +70,7 @@ fn current_depth() -> u32 {
 mod tests {
     use super::*;
     use crate::cli::CliOptions;
+    use crate::harness::HarnessFactory;
 
     fn request(harness: &str, prompt: &str) -> Request {
         Request::from_options(
@@ -132,32 +98,19 @@ mod tests {
     }
 
     #[test]
-    fn solve_meta_forwards_passthrough_and_no_yolo() {
-        let mut req = request("solve", "fix it");
+    fn fuse_meta_forwards_passthrough_and_no_yolo() {
+        let mut req = request("fuse", "design it");
         req.yolo = false;
         req.passthrough = vec!["--panel".to_string(), "cl,co".to_string()];
         let inv = HarnessFactory::default()
-            .create("solve")
+            .create("fuse")
             .unwrap()
             .build(&req)
             .unwrap();
         assert_eq!(
             inv.args,
-            vec!["solve", "-p", "fix it", "--no-yolo", "--panel", "cl,co"]
+            vec!["fuse", "-p", "design it", "--no-yolo", "--panel", "cl,co"]
         );
-    }
-
-    #[test]
-    fn auto_meta_delegates_to_a_real_agent() {
-        // "design ... architecture" routes to a real agent; the built invocation
-        // must be that agent's, never `par`.
-        let inv = HarnessFactory::default()
-            .create("auto")
-            .unwrap()
-            .build(&request("auto", "design a scalable architecture"))
-            .unwrap();
-        assert!(!is_meta(&inv.command));
-        assert_ne!(inv.command, self_bin());
     }
 
     #[test]

@@ -9,15 +9,12 @@
 use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::time::Instant;
 
 use crate::ask::{self, AskRequest};
 use crate::cli::ConverseOptions;
 use crate::harness::normalize_harness;
-use crate::route;
 use crate::session::{self, Turn};
 use crate::signals;
-use crate::telemetry::Event;
 
 /// Hard cap on turns to keep a runaway loop from spawning endless agents.
 const MAX_TURNS: usize = 50;
@@ -81,8 +78,6 @@ pub(crate) fn run_cli(options: ConverseOptions) -> Result<(), String> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    let started = Instant::now();
-    let mut looped = false;
     let mut dialogue: Vec<Turn> = Vec::new();
     for turn in 0..options.turns {
         let speaker = &speakers[turn % 2];
@@ -160,22 +155,9 @@ pub(crate) fn run_cli(options: ConverseOptions) -> Result<(), String> {
                 "\n(stopping: the conversation is looping — replies stopped progressing)"
             )
             .ok();
-            looped = true;
             break;
         }
     }
-
-    Event {
-        cmd: "converse",
-        panel: vec![speakers[0].harness.clone(), speakers[1].harness.clone()],
-        task_class: Some(route::classify(&topic).name().to_string()),
-        prompt: Some(topic.clone()),
-        ok: !looped,
-        duration_ms: started.elapsed().as_millis(),
-        looped,
-        ..Event::default()
-    }
-    .record();
 
     Ok(())
 }

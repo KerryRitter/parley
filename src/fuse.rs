@@ -20,7 +20,6 @@ use std::thread;
 use crate::ask::{self, AskRequest, ContextRef};
 use crate::cli::FuseOptions;
 use crate::harness::normalize_harness;
-use crate::route;
 use crate::session;
 
 /// Default panel when none is supplied: three different model families.
@@ -48,11 +47,10 @@ pub(crate) fn run_cli(options: FuseOptions) -> Result<(), String> {
         .max_context_chars
         .unwrap_or(session::DEFAULT_CONTEXT_CHARS);
 
-    // `--panel auto` (the sole entry) asks the router to pick a diverse panel.
-    // `auto` listed alongside others (`--panel auto,solve`) is instead a
-    // metaharness panelist, handled by the harness factory like any other.
+    // `--panel auto` (the sole entry) means "use the default diverse trio",
+    // same as passing no panel at all.
     let panel_codes = if options.panel.len() == 1 && options.panel[0] == "auto" {
-        route::pick_panel(&prompt, 3, route::resolve_bias(None), true)
+        Vec::new()
     } else {
         options.panel.clone()
     };

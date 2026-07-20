@@ -199,10 +199,8 @@ impl Default for HarnessFactory {
             ("copilot", copilot::new as HarnessConstructor),
             ("kimi", kimi::new as HarnessConstructor),
             ("qwen", qwen::new as HarnessConstructor),
-            // Meta-harnesses: harnesses that call back into `par` itself.
-            ("auto", meta::auto as HarnessConstructor),
+            // Meta-harness: a harness that calls back into `par` itself.
             ("fuse", meta::fuse as HarnessConstructor),
-            ("solve", meta::solve as HarnessConstructor),
         ]
         .into_iter()
         .collect();
@@ -229,12 +227,6 @@ impl HarnessFactory {
 
 pub(crate) fn known_harnesses() -> Vec<&'static str> {
     HARNESS_SPECS.iter().map(|spec| spec.name).collect()
-}
-
-/// Is this a meta-harness — one that calls back into `par` rather than driving a
-/// single agent CLI (`auto`, `fuse`, `solve`)?
-pub(crate) fn is_meta(name: &str) -> bool {
-    matches!(normalize_harness(name).as_str(), "auto" | "fuse" | "solve")
 }
 
 /// Absolute path to the running `par` binary, so a recursive invocation works

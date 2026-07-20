@@ -22,7 +22,11 @@ fn exclusive_guard(command: &str) -> Option<MutexGuard<'static, ()>> {
     };
     // A panicked holder poisons the lock; recover the guard rather than
     // propagate — the child that panicked is already gone.
-    Some(mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+    Some(
+        mutex
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    )
 }
 
 /// Run an invocation with inherited stdio and **replace this process** by
@@ -437,12 +441,19 @@ mod tests {
 
     #[test]
     fn concise_error_prefers_the_error_line_over_a_stack_trace() {
-        let stderr = "SomeError: boom\n    at foo (x.js:1:2)\n    at bar (y.js:3:4)\nError: real message";
-        assert_eq!(concise_error(stderr).as_deref(), Some("Error: real message"));
+        let stderr =
+            "SomeError: boom\n    at foo (x.js:1:2)\n    at bar (y.js:3:4)\nError: real message";
+        assert_eq!(
+            concise_error(stderr).as_deref(),
+            Some("Error: real message")
+        );
     }
 
     #[test]
     fn strip_ansi_removes_color_codes() {
-        assert_eq!(strip_ansi("\u{1b}[91m\u{1b}[1mError:\u{1b}[0m x"), "Error: x");
+        assert_eq!(
+            strip_ansi("\u{1b}[91m\u{1b}[1mError:\u{1b}[0m x"),
+            "Error: x"
+        );
     }
 }
