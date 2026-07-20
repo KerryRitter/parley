@@ -558,15 +558,10 @@ fn call_tool(request: &Json, default_cwd: &Path) -> Result<Json, (i64, String)> 
                     .unwrap_or(session::DEFAULT_CONTEXT_CHARS),
             };
             match ask::run(&request) {
-                Ok(out) if out.success => Ok(text_content(out.stdout.trim(), false)),
-                Ok(out) => {
-                    let msg = if out.stderr.trim().is_empty() {
-                        out.stdout.trim().to_string()
-                    } else {
-                        out.stderr.trim().to_string()
-                    };
-                    Ok(text_content(&format!("{harness} failed: {msg}"), true))
-                }
+                Ok(out) => match out.reply() {
+                    Ok(reply) => Ok(text_content(&reply, false)),
+                    Err(msg) => Ok(text_content(&format!("{harness} failed: {msg}"), true)),
+                },
                 Err(e) => Ok(text_content(&e, true)),
             }
         }

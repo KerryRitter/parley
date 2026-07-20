@@ -571,6 +571,35 @@ async fn stream_command(
         status.code()
     };
 
+    // A clean exit with no output at all is a silent failure for a chat turn:
+    // some agents swallow backend errors this way (antigravity exits 0 with empty
+    // stdout *and* stderr when it hits a rate limit or quota, logging the 429 only
+    // to its own file). Without this the pane just renders blank under a green
+    // "✓ exit 0", which reads as a hang. Surface it instead.
+    if full.trim().is_empty() && code != Some(CODE_STOPPED) {
+        emit(
+            app,
+            ChatEvent {
+                chat_id: chat_id.into(),
+                msg_id: msg_id.into(),
+                pane: pane.into(),
+                // A "chunk" lands in the pane body (kept after "done"); a "status"
+                // event is transient and only shows while the run is live, so it
+                // would vanish on a finished empty pane.
+                kind: "chunk".into(),
+                text: Some(format!(
+                    "⚠ no output (exit {}) — the agent returned nothing. It may have errored, been rate-limited, or hit its quota; check that agent's own logs.",
+                    code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+                )),
+                agent: None,
+                warm: None,
+                code: None,
+                ms: None,
+                cmd: None,
+            },
+        );
+    }
+
     emit(
         app,
         ChatEvent {

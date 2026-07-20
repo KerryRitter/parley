@@ -1,11 +1,29 @@
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::harness::Invocation;
+
+/// Some agent CLIs keep a single, migration-locked local state store and wedge
+/// when two instances run at once. Antigravity's `agy` is the known case: two
+/// concurrent `agy` processes deadlock on their shared conversations DB
+/// migration ("Waiting for migrations to complete..."), which hangs a `fuse`
+/// panel that lists `agy` more than once. Serialize those commands within this
+/// process so panelists queue instead of deadlocking. Cross-process contention
+/// (an `agy` already running outside `par`) is out of our hands.
+fn exclusive_guard(command: &str) -> Option<MutexGuard<'static, ()>> {
+    static AGY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let mutex = match command {
+        "agy" => AGY_LOCK.get_or_init(|| Mutex::new(())),
+        _ => return None,
+    };
+    // A panicked holder poisons the lock; recover the guard rather than
+    // propagate — the child that panicked is already gone.
+    Some(mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+}
 
 /// Run an invocation with inherited stdio and **replace this process** by
 /// exiting with the child's status. Used for interactive launches and `mcp
@@ -60,6 +78,86 @@ pub(crate) struct Captured {
     pub timed_out: bool,
 }
 
+impl Captured {
+    /// The agent's usable reply, or an error explaining why there is none.
+    ///
+    /// A clean exit with **empty stdout** is treated as a failure, not an empty
+    /// answer: some CLIs (notably opencode) print the error to stderr and still
+    /// exit 0, so keying only on the exit status would hand back a blank
+    /// "success" — which reads to the caller as a hung or broken agent. For
+    /// ask/fuse an empty reply is never useful, so surface the stderr instead.
+    pub(crate) fn reply(&self) -> Result<String, String> {
+        let stdout = self.stdout.trim();
+        if self.success && !stdout.is_empty() {
+            return Ok(stdout.to_string());
+        }
+        Err(self.failure_message())
+    }
+
+    /// A concise reason the call did not yield a reply.
+    pub(crate) fn failure_message(&self) -> String {
+        let stderr = concise_error(&self.stderr);
+        if self.timed_out {
+            return match stderr {
+                Some(err) => format!("timed out with no complete reply: {err}"),
+                None => "timed out with no reply within the time budget".to_string(),
+            };
+        }
+        if let Some(err) = stderr {
+            return err;
+        }
+        let stdout = self.stdout.trim();
+        if !stdout.is_empty() {
+            return stdout.to_string();
+        }
+        "exited without producing any output".to_string()
+    }
+}
+
+/// Pull a concise, human-readable error out of a captured stderr stream:
+/// prefer the last line that looks like an error message, else the last
+/// non-empty line. ANSI escape codes are stripped so the result is plain text.
+fn concise_error(stderr: &str) -> Option<String> {
+    let mut last_nonempty: Option<String> = None;
+    let mut last_errorish: Option<String> = None;
+    for raw in stderr.lines() {
+        let line = strip_ansi(raw);
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.contains("error") || lower.contains("not found") || lower.contains("failed") {
+            last_errorish = Some(trimmed.to_string());
+        }
+        last_nonempty = Some(trimmed.to_string());
+    }
+    last_errorish.or(last_nonempty)
+}
+
+/// Remove ANSI/VT100 escape sequences (`ESC [ ... <final>`) from a string.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Consume a CSI sequence: ESC [ params/intermediates final-byte.
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for e in chars.by_ref() {
+                    // Final byte of a CSI sequence is in the range @..~.
+                    if ('\u{40}'..='\u{7e}').contains(&e) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Run an invocation to completion, capturing stdout/stderr instead of
 /// inheriting them. stdin is closed so the child cannot block on a prompt.
 pub(crate) fn capture_invocation(
@@ -112,6 +210,10 @@ pub(crate) fn capture_invocation_timeout(
     cwd: Option<&str>,
     timeouts: Timeouts,
 ) -> Result<Captured, String> {
+    // Held for the whole child run for commands that can't run concurrently
+    // (see `exclusive_guard`); a no-op for everything else.
+    let _exclusive = exclusive_guard(&invocation.command);
+
     let mut command = Command::new(&invocation.command);
     command
         .args(&invocation.args)
@@ -288,5 +390,59 @@ mod tests {
         assert_eq!(out.stdout, "done");
         assert!(out.success);
         assert!(!out.timed_out);
+    }
+
+    fn captured(stdout: &str, stderr: &str, success: bool, timed_out: bool) -> Captured {
+        Captured {
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            success,
+            timed_out,
+        }
+    }
+
+    #[test]
+    fn reply_returns_trimmed_stdout_on_success() {
+        let out = captured("  PONG\n", "", true, false);
+        assert_eq!(out.reply().unwrap(), "PONG");
+    }
+
+    #[test]
+    fn reply_treats_empty_stdout_as_failure_even_when_exit_zero() {
+        // opencode's failure mode: prints the error to stderr, exits 0.
+        let out = captured(
+            "",
+            "\u{1b}[91m\u{1b}[1mError: \u{1b}[0mModel not found: opencode/glm-5.2.",
+            true,
+            false,
+        );
+        let err = out.reply().unwrap_err();
+        assert_eq!(err, "Error: Model not found: opencode/glm-5.2.");
+    }
+
+    #[test]
+    fn reply_surfaces_timeout() {
+        let out = captured("partial", "", false, true);
+        assert!(out.reply().unwrap_err().contains("timed out"));
+    }
+
+    #[test]
+    fn reply_falls_back_to_generic_when_silent() {
+        let out = captured("", "", false, false);
+        assert_eq!(
+            out.reply().unwrap_err(),
+            "exited without producing any output"
+        );
+    }
+
+    #[test]
+    fn concise_error_prefers_the_error_line_over_a_stack_trace() {
+        let stderr = "SomeError: boom\n    at foo (x.js:1:2)\n    at bar (y.js:3:4)\nError: real message";
+        assert_eq!(concise_error(stderr).as_deref(), Some("Error: real message"));
+    }
+
+    #[test]
+    fn strip_ansi_removes_color_codes() {
+        assert_eq!(strip_ansi("\u{1b}[91m\u{1b}[1mError:\u{1b}[0m x"), "Error: x");
     }
 }

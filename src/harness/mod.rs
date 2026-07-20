@@ -732,7 +732,62 @@ mod tests {
             .unwrap();
 
         assert_eq!(invocation.command, "agy");
-        assert_eq!(invocation.args, vec!["review this"]);
+        assert_eq!(
+            invocation.args,
+            vec!["--model", "gemini-3-pro", "--print", "review this"]
+        );
+    }
+
+    #[test]
+    fn antigravity_headless_uses_print_and_yolo() {
+        let request = Request::from_options(
+            CliOptions {
+                harness: "agy".to_string(),
+                prompt: Some("summarize the repo".to_string()),
+                yolo: true,
+                ..CliOptions::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+
+        let invocation = HarnessFactory::default()
+            .create(&request.harness)
+            .unwrap()
+            .build(&request)
+            .unwrap();
+
+        // Yolo flag before --print; prompt is --print's value and comes last so
+        // agy runs non-interactively instead of opening its TUI.
+        assert_eq!(
+            invocation.args,
+            vec![
+                "--dangerously-skip-permissions",
+                "--print",
+                "summarize the repo"
+            ]
+        );
+    }
+
+    #[test]
+    fn antigravity_interactive_has_no_print() {
+        let request = Request::from_options(
+            CliOptions {
+                harness: "agy".to_string(),
+                ..CliOptions::default()
+            },
+            String::new(),
+        )
+        .unwrap();
+
+        let invocation = HarnessFactory::default()
+            .create(&request.harness)
+            .unwrap()
+            .build(&request)
+            .unwrap();
+
+        assert_eq!(invocation.command, "agy");
+        assert!(!invocation.args.iter().any(|a| a == "--print"));
     }
 
     fn build(options: CliOptions) -> Invocation {

@@ -199,16 +199,10 @@ pub(crate) fn run_judge(
     run_one(&req)
 }
 
-/// Run one agent headless, flattening a non-zero exit into an error string.
+/// Run one agent headless, flattening a failure (non-zero exit, timeout, or a
+/// clean exit with no output) into an error string so the panel can skip it.
 fn run_one(req: &AskRequest) -> Result<String, String> {
-    let out = ask::run(req)?;
-    if out.success {
-        Ok(out.stdout.trim().to_string())
-    } else if !out.stderr.trim().is_empty() {
-        Err(out.stderr.trim().to_string())
-    } else {
-        Err("exited with a failure status".to_string())
-    }
+    ask::run(req)?.reply()
 }
 
 /// Build one `AskRequest` per panelist, deduplicating labels when the same agent

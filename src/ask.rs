@@ -88,17 +88,13 @@ pub(crate) fn run_cli(options: AskOptions) -> Result<(), String> {
     }
 
     let out = run(&req)?;
-    print!("{}", out.stdout);
-    if !out.stdout.ends_with('\n') {
-        println!();
-    }
-    if !out.success {
-        if !out.stderr.trim().is_empty() {
-            eprint!("{}", out.stderr);
+    match out.reply() {
+        Ok(reply) => {
+            println!("{reply}");
+            Ok(())
         }
-        return Err(format!("{} exited with a failure status", req.harness));
+        Err(msg) => Err(format!("{} produced no reply: {msg}", req.harness)),
     }
-    Ok(())
 }
 
 fn resolve(options: AskOptions) -> Result<AskRequest, String> {

@@ -124,20 +124,16 @@ pub(crate) fn run_cli(options: ConverseOptions) -> Result<(), String> {
             continue;
         }
 
-        let result = ask::run(&req)?;
-        let text = result.stdout.trim().to_string();
-        if !result.success {
-            let err = if result.stderr.trim().is_empty() {
-                &text
-            } else {
-                result.stderr.trim()
-            };
-            return Err(format!(
-                "{} failed on turn {}: {err}",
-                speaker.harness,
-                turn + 1
-            ));
-        }
+        let text = match ask::run(&req)?.reply() {
+            Ok(reply) => reply,
+            Err(err) => {
+                return Err(format!(
+                    "{} failed on turn {}: {err}",
+                    speaker.harness,
+                    turn + 1
+                ))
+            }
+        };
 
         writeln!(out, "\n━━ turn {} · {} ━━", turn + 1, speaker.harness).ok();
         writeln!(out, "{text}").ok();
