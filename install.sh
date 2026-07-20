@@ -112,7 +112,8 @@ detect_target() {
 
   case "$os" in
     linux)
-      os_part="unknown-linux-gnu"
+      # Static musl binaries — run on any Linux regardless of glibc version.
+      os_part="unknown-linux-musl"
       ;;
     darwin)
       os_part="apple-darwin"

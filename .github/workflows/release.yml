@@ -42,9 +42,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          # Linux targets are static musl builds: a gnu build links against the
+          # runner's (newer) glibc and then won't run on older distros, whereas a
+          # fully-static musl binary runs on any Linux (Alpine included). par is
+          # pure std, so rustc's self-contained musl needs no external libc.
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
           # Both macOS targets build on Apple-Silicon runners — they
           # cross-compile the x86_64 slice natively, and the Intel (macos-13)
@@ -65,14 +69,18 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # par is pure std (no C deps / build.rs), so cross-compiling aarch64 linux
-      # just needs the GNU linker — no `cross`/container required.
-      - name: Set up aarch64 linux linker
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Set up musl (x86_64 linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      # aarch64 musl cross-links via the GNU aarch64 gcc as the linker driver;
+      # rustc supplies the static musl libc itself (par has no C deps).
+      - name: Set up aarch64 musl cross linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
 
       # Builds the release binary, packs it as par-<target>.tar.gz (unix) /
       # par-<target>.zip (windows) with the executable at the archive root, adds
