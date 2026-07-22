@@ -99,6 +99,13 @@ Installs `par.exe` into `%LOCALAPPDATA%\Programs\par` and adds it to your user `
 
 Prebuilt binaries cover Linux (x86_64, aarch64), macOS (Intel + Apple Silicon), and Windows (x86_64). The macOS/Linux script falls back to a source build only if no prebuilt binary matches your platform.
 
+**Update in place** — no reinstall, no Rust:
+
+```sh
+par update            # download the latest release binary and replace the running one
+par update --dry-run  # show what it would do
+```
+
 > `par` routes to agent CLIs — it does not install them for you automatically. Install the agents you want with [`par install`](#install-agent-clis), or bring your own.
 
 ### Other install methods

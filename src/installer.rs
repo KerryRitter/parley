@@ -1,3 +1,4 @@
+use std::env;
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,14 +186,89 @@ pub(crate) fn run_update(options: UpdateOptions) -> Result<(), String> {
     }
 }
 
+/// Self-update: pull the latest prebuilt release binary and replace the running
+/// `par` in place. Reuses the platform install script (which already handles
+/// target detection, the musl mapping, download, and the atomic overwrite) with
+/// `PAR_INSTALL_DIR` pinned to this binary's own directory so it updates the
+/// copy you're actually running rather than dropping a second one elsewhere.
 fn update_self(dry_run: bool) -> Result<(), String> {
-    let command = "cargo install --git https://github.com/KerryRitter/parley.git --branch main";
-    println!("updating par...");
+    let dir = self_install_dir();
+    println!("updating par in {dir}...");
+
+    if cfg!(windows) {
+        // PowerShell drives install.ps1; single-quotes in the dir are doubled.
+        let script = format!(
+            "$env:PAR_INSTALL_DIR='{}'; irm https://raw.githubusercontent.com/KerryRitter/parley/main/install.ps1 | iex",
+            dir.replace('\'', "''")
+        );
+        if dry_run {
+            println!("dry-run: powershell -NoProfile -Command \"{script}\"");
+            return Ok(());
+        }
+        return run_updater(
+            "powershell",
+            &[
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &script,
+            ],
+            &dir,
+        );
+    }
+
+    // Unix: curl|sh the install script. Overwriting the running binary is safe —
+    // `install` unlinks and recreates, so this process keeps its old inode.
+    let command =
+        "curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/KerryRitter/parley/main/install.sh | sh";
     if dry_run {
-        println!("dry-run: sh -c '{command}'");
+        println!("dry-run: PAR_INSTALL_DIR={dir} sh -c '{command}'");
         return Ok(());
     }
-    run_shell(command)
+    run_updater("sh", &["-c", command], &dir)
+}
+
+/// Directory the running `par` lives in — where a self-update should land.
+/// Resolves symlinks (e.g. the `agent-router` alias) via `current_exe`.
+fn self_install_dir() -> String {
+    if let Ok(exe) = env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return dir.to_string_lossy().into_owned();
+        }
+    }
+    // Fall back to the default install location if the exe path is unavailable.
+    if cfg!(windows) {
+        match env::var("LOCALAPPDATA") {
+            Ok(base) => format!("{base}\\Programs\\par"),
+            Err(_) => ".".to_string(),
+        }
+    } else {
+        match env::var("HOME") {
+            Ok(home) => format!("{home}/.local/bin"),
+            Err(_) => ".".to_string(),
+        }
+    }
+}
+
+/// Run the updater command with `PAR_INSTALL_DIR` set and stdio inherited.
+fn run_updater(command: &str, args: &[&str], install_dir: &str) -> Result<(), String> {
+    let status = Command::new(command)
+        .args(args)
+        .env("PAR_INSTALL_DIR", install_dir)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| format!("failed to start the updater ({command}): {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "self-update failed: {command} exited with {status}"
+        ))
+    }
 }
 
 pub(crate) fn known_installers() -> Vec<&'static str> {

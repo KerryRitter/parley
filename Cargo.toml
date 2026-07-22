@@ -1,6 +1,6 @@
 [package]
 name = "parley"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Parley — an MCP server that lets AI coding agents talk to each other: ask another agent a question, hand off a session, or convene a panel and fuse their answers."
 license = "MIT"

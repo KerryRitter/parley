@@ -71,6 +71,19 @@ mod tests {
     use super::*;
     use crate::cli::CliOptions;
     use crate::harness::HarnessFactory;
+    use std::sync::Mutex;
+
+    // PARLEY_META_DEPTH is process-global, so `depth_guard_trips` mutating it can
+    // leak into a sibling test that builds a meta harness concurrently. Serialize
+    // every test that reads or writes it. Recover from a poisoned lock so one
+    // test's panic doesn't cascade into false failures elsewhere.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn request(harness: &str, prompt: &str) -> Request {
         Request::from_options(
@@ -87,6 +100,7 @@ mod tests {
 
     #[test]
     fn fuse_meta_recurses_into_par_fuse() {
+        let _guard = env_guard();
         let inv = HarnessFactory::default()
             .create("fuse")
             .unwrap()
@@ -99,6 +113,7 @@ mod tests {
 
     #[test]
     fn fuse_meta_forwards_passthrough_and_no_yolo() {
+        let _guard = env_guard();
         let mut req = request("fuse", "design it");
         req.yolo = false;
         req.passthrough = vec!["--panel".to_string(), "cl,co".to_string()];
@@ -115,6 +130,7 @@ mod tests {
 
     #[test]
     fn depth_guard_trips_at_the_limit() {
+        let _guard = env_guard();
         env::set_var(META_DEPTH_ENV, MAX_META_DEPTH.to_string());
         let result = HarnessFactory::default()
             .create("fuse")

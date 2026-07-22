@@ -377,11 +377,12 @@ Install:
   install --dry-run <name> Print installer commands without running them
 
 Update:
-  update                  Update par itself
-  update self             Update par itself (explicit)
+  update                  Self-update par: download the latest release binary and
+                          replace the running one in place (no Rust toolchain)
+  update self             Same as above (explicit)
   update <name>           Update a specific harness CLI
   update all              Update par and all harness CLIs
-  update --dry-run <name> Print update commands without running them
+  update --dry-run        Print what would run without downloading or replacing
 
 Convert:
   convert                         Auto-detect source, convert to all targets
