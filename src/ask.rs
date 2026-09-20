@@ -65,8 +65,7 @@ pub(crate) fn build(req: &AskRequest) -> Result<Invocation, String> {
     };
 
     let request = Request::from_options(options, String::new())?;
-    let harness = HarnessFactory::default().create(&request.harness)?;
-    harness.build(&request)
+    HarnessFactory::default().build(&request)
 }
 
 /// Build and run the call, returning the target agent's captured output. A

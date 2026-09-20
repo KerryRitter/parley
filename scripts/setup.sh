@@ -9,6 +9,7 @@ RUN_CLIPPY=1
 RUN_FMT=1
 RUN_TESTS=1
 RUN_BUILD=1
+RUN_SDK=1
 INSTALL_DIR="${HOME}/.local/bin"
 
 usage() {
@@ -25,6 +26,7 @@ Options:
   --no-fmt               Skip cargo fmt --check
   --no-tests             Skip cargo test
   --no-build             Skip cargo build --release
+  --no-sdk               Skip TypeScript SDK build and integration tests
   -h, --help             Show this help
 EOF
 }
@@ -80,6 +82,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-build)
       RUN_BUILD=0
+      shift
+      ;;
+    --no-sdk)
+      RUN_SDK=0
       shift
       ;;
     -h|--help)
@@ -152,6 +158,22 @@ if [ "$RUN_BUILD" -eq 1 ]; then
   run cargo build --release
 fi
 
+if [ "$RUN_SDK" -eq 1 ]; then
+  if have npm && have node; then
+    if [ "$RUN_BUILD" -eq 1 ]; then
+      SDK_PAR_BIN="$ROOT_DIR/target/release/par"
+    else
+      run cargo build
+      SDK_PAR_BIN="$ROOT_DIR/target/debug/par"
+    fi
+    run npm --prefix sdk/typescript ci
+    info "running: npm --prefix sdk/typescript test"
+    PARLEY_BIN="$SDK_PAR_BIN" npm --prefix sdk/typescript test
+  else
+    warn "node/npm unavailable; skipping TypeScript SDK validation"
+  fi
+fi
+
 supported_harnesses=(
   "claude:claude"
   "codex:codex"
@@ -163,6 +185,7 @@ supported_harnesses=(
   "aider:aider"
   "amazon-q:q"
   "copilot:copilot"
+  "kimi:kimi"
   "antigravity:agy"
   "muse:muse"
   "pi:pi"

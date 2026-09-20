@@ -6,33 +6,30 @@
 
 **Your coding agents are smarter together.**
 
-A **CLI** *and* an **MCP server** that convene a panel of the agents you already run — Claude, Codex, Gemini, and more — and fuse their answers into one.
+A **CLI**, **TypeScript SDK**, and **MCP server** over one Rust runtime for Claude, Codex, Gemini, and the other coding agents you already run.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 &nbsp;![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)
 &nbsp;![Dependencies: 0](https://img.shields.io/badge/dependencies-0-brightgreen)
 &nbsp;![Platforms](https://img.shields.io/badge/macOS%20·%20Linux%20·%20Windows-555)
 
-[**Install**](#install) · [**Fuse**](#fuse--a-panel-of-agents-one-answer) · [**CLI ↔ MCP**](#two-surfaces-one-tool) · [**Playbook**](docs/fusion-playbook.md) · [**Why**](#why)
+[**Install**](#install) · [**SDK**](#typescript-sdk) · [**Fuse**](#fuse--a-panel-of-agents-one-answer) · [**CLI · SDK · MCP**](#three-surfaces-one-runtime) · [**Playbook**](docs/fusion-playbook.md) · [**Why**](#why)
 
 </div>
 
 ---
 
-A single agent is a single model's judgment — one set of blind spots. Parley sends the same problem to a **panel** of agent CLIs, then fuses their replies: where they agree you get high-confidence consensus, where they disagree you get a flag worth your attention, and what none caught the panel surfaces. This is the multi-model deliberation behind **[Sakana's AB-MCTS](https://sakana.ai/ab-mcts/)** and **[OpenRouter's Fusion](https://openrouter.ai/blog/announcements/fusion-beats-frontier/)** — both report combined models beating any single one — but running over the CLIs already on your machine, with *their* auth and *your* context. **No API keys. No new vendor. Your code never leaves.**
+A single agent is a single model's judgment — one set of blind spots. Parley sends the same problem to a **panel** of agent CLIs, then fuses their replies: where they agree you get high-confidence consensus, where they disagree you get a flag worth your attention, and what none caught the panel surfaces. This is the multi-model deliberation behind **[Sakana's AB-MCTS](https://sakana.ai/ab-mcts/)** and **[OpenRouter's Fusion](https://openrouter.ai/blog/announcements/fusion-beats-frontier/)** — both report combined models beating any single one — but running over the CLIs already on your machine, with *their* auth and *your* context. **No new API keys required. No new vendor.**
 
-## Two surfaces, one tool
+## Three surfaces, one runtime
 
-Parley is **first-class both ways** — a CLI you drive, and an MCP server your agent drives. Same engine, same capabilities, whichever side you call it from:
+The surfaces have different owners, but share the same adapter and process layer:
 
-| Capability | **CLI** — *you* run it | **MCP** — *your agent* calls it |
+| Surface | Intended caller | Best at |
 | --- | --- | --- |
-| **Fuse** a panel into one answer | `par fuse "design a rate limiter"` | `fuse` tool |
-| **Ask** another agent, with context | `par ask -h g -p "…" --context-from cl` | `ask_agent` tool |
-| **Resume** any agent's session here | `par resume` | `list_sessions` · `get_last_session` · `resume_command` |
-| **Converse** — two agents, multi-turn | `par converse --a cl --b g -p "…"` | *(compose via `ask_agent`)* |
-| **Route** a prompt to any agent | `par -p "…" -h <agent>` | — |
-| **Convert** one config to every agent | `par convert` | — |
+| **CLI** | A person or shell script | Interactive use, config/session tools, one-off routing and fusion |
+| **TypeScript SDK** | An orchestrator such as Zipper | Typed jobs, streaming, cancellation, timeouts, environment isolation, executable overrides |
+| **MCP** | An agent already in a conversation | Letting that agent ask, resume, or fuse without leaving its harness |
 
 ```sh
 # Drive it yourself…
@@ -43,7 +40,7 @@ par mcp connect -h cl                                # registers the MCP server 
 #   then just say: "fuse this across codex and gemini"  → Claude calls the `fuse` tool itself
 ```
 
-Parley is a small, dependency-free Rust CLI (binary: `par`). It never calls a model API itself — it drives the agent CLIs you already have, so your auth, models, and permissions stay with them. The MCP server exposes the very same operations as tools, so nothing is locked to one surface.
+Parley is a small, dependency-free Rust runtime (binary: `par`). It never calls a model API itself — it drives the agent CLIs you already have. The SDK adds orchestration semantics without moving workflow policy into Parley: Zipper can split a plan into jobs and pick Luna, Sol, or another worker; Parley owns how each selected harness is invoked and supervised.
 
 ## Why
 
@@ -153,6 +150,7 @@ The script installs a prebuilt release binary for your platform when available, 
 | [`par ask`](#ask--one-agent-talks-to-another) | Ask another agent headless, optionally seeded with a prior session's context |
 | [`par converse`](#converse--two-agents-multi-turn) | Put two agents in a multi-turn conversation, watching them work it out |
 | [`par mcp`](#mcp--fuse-ask-and-resume-from-inside-your-agent) | Run an MCP server: agents can **fuse** a panel, ask each other, and resume sessions |
+| [`@parley/sdk`](#typescript-sdk) | Run typed, cancellable agent jobs from Node.js/TypeScript orchestration |
 
 ---
 
@@ -199,6 +197,10 @@ par -h k -p "drain the queue"
 | `--permission-mode <mode>` | Permission/sandbox mode, where supported. |
 | `--max-turns <n>` | Max agent turns, where supported. |
 | `--cwd <path>` | Working directory for the child process. |
+| `--executable <path>` | Replace the adapter's normal executable with a compatible wrapper such as `exo-codex` or `qwenp`. |
+| `--env <KEY=VALUE>` | Set a child environment variable; repeatable. |
+| `--unset-env <KEY>` | Remove one child environment variable after adapter defaults; repeatable. |
+| `--no-inherit-env` | Clear the inherited child environment before applying `--env`. |
 | `--yolo` / `--no-yolo` | Add / skip the agent's permission-bypass flag. **On by default.** |
 | `--dry-run` | Print the routed invocation as JSON; run nothing. |
 | `--version`, `-v` | Print version. |
@@ -248,6 +250,24 @@ export PARLEY_YOLO=true
 # legacy AGENT_ROUTER_* names are still honored as a fallback
 ```
 
+Per-run child overrides are separate from Parley's own defaults:
+
+```sh
+par -h co -p "run the tests" \
+  --executable exo-codex \
+  --env OPENAI_BASE_URL=http://127.0.0.1:52415/v1 \
+  --env OPENAI_API_KEY=local-exo-key
+
+par -h q -p "implement this task" \
+  --executable qwenp \
+  --env OPENAI_BASE_URL=http://127.0.0.1:52415/v1 \
+  --env OPENAI_API_KEY=local-qwen-key
+```
+
+The overrides apply after adapter-provided values. `--dry-run` redacts variable
+names that look secret, but `KEY=VALUE` CLI arguments may still be visible to
+the shell or process table; use the SDK for programmatic secret injection.
+
 ### Shims
 
 Generate `*y` one-shot shortcuts for yolo-capable agents:
@@ -259,6 +279,64 @@ codexy "work in this sandbox"
 ```
 
 Override the location with `par shims install --dir <dir>` or `PAR_SHIM_DIR`. `par shims list` prints the generated names and commands.
+
+---
+
+## TypeScript SDK
+
+`@parley/sdk` is a typed orchestration layer over the Rust runtime. It launches
+`par sdk run`, sends the complete request over stdin as versioned JSONL, and
+returns a cancellable async event stream. Prompts and environment values do not
+appear in the `par` process argv.
+
+```sh
+cd sdk/typescript
+npm install
+npm run build
+```
+
+```ts
+import { ParleyClient, openAICompatibleEnv } from "@parley/sdk";
+
+const parley = new ParleyClient({ binary: "/path/to/par" });
+const run = parley.start({
+  harness: "codex",
+  model: "gpt-5.6-luna",
+  prompt: "Implement task 3 and run its focused tests",
+  cwd: process.cwd(),
+  executable: "exo-codex", // optional compatible wrapper
+  env: openAICompatibleEnv({
+    baseUrl: "http://127.0.0.1:52415/v1",
+    apiKey: process.env.EXO_API_KEY,
+  }),
+  timeout: { overallMs: 30 * 60_000, idleMs: 5 * 60_000 },
+});
+
+for await (const event of run) {
+  if (event.type === "stdout") process.stdout.write(event.data);
+}
+
+const result = await run.result();
+```
+
+The request maps the full shared adapter surface: harness, provider, model,
+agent/persona, working directory, input/output formats, permission mode, turn
+limit, session/resume IDs, passthrough arguments, executable, environment,
+inheritance, and yolo. SDK yolo defaults to **false**, unlike the human CLI.
+Runs expose stdout/stderr events, bounded output tails, overall and idle
+timeouts, `AbortSignal`, explicit `cancel()`, and process-tree termination.
+
+Discover support before scheduling a job:
+
+```ts
+const codex = await parley.capabilities("codex");
+const everyHarness = await parley.capabilities();
+```
+
+The transport is language-neutral. Other harnesses can call `par sdk run`
+directly and exchange the same JSONL request, event, and `{"type":"cancel"}`
+control messages. `par sdk capabilities` publishes the adapter feature matrix.
+See the [v1 protocol specification](docs/sdk-protocol.md) for the wire contract.
 
 ---
 
@@ -543,7 +621,9 @@ Expected `--dry-run` shape:
 {
   "command": "opencode",
   "args": ["run", "--model", "anthropic/claude-sonnet-4-6", "review"],
-  "env": {}
+  "env": {},
+  "envRemove": [],
+  "clearEnv": false
 }
 ```
 
@@ -551,11 +631,13 @@ Expected `--dry-run` shape:
 
 ```text
 src/
-  main.rs              entrypoint, stdin handling, dry-run, dispatch
+  main.rs              tiny binary wrapper around the library
+  lib.rs               public Rust API + CLI/MCP/SDK dispatch
+  sdk.rs               typed Rust runtime, capability matrix, JSONL process protocol
   cli.rs               command-line parser
   model.rs             provider/model resolution
   process.rs           child process execution (inherit-stdio run + captured run)
-  json.rs              zero-dep JSON parser/serializer (used by convert, session, ask, mcp)
+  json.rs              zero-dep JSON parser/serializer (used by convert, session, MCP, SDK)
   ask.rs               agent-to-agent calls (headless run + transcript context injection)
   converse.rs          multi-turn two-agent conversation loop (+ loop detection)
   fuse.rs              panel fusion engine — parallel panel + judge (`par fuse` and the mcp `fuse` tool)
@@ -572,9 +654,12 @@ src/
     claude.rs codex.rs opencode.rs pi.rs   native parsers (cwd-scoped listing + transcripts)
     cursor.rs gemini.rs              delegate adapters (resume via native CLI)
   installer.rs         agent installer registry
+sdk/typescript/
+  src/index.ts          @parley/sdk client, async event stream, cancellation, env helpers
+  test/                 end-to-end tests against the compiled Rust binary
 ```
 
-**Design constraints:** no `sh -c` (adapters build argv directly); no hidden API calls (only starts local CLIs); no login handling (authenticate each agent separately); agent-specific behavior stays in its module; provider/model transforms stay centralized in `model.rs`; `--dry-run` output stays stable enough for tests.
+**Design constraints:** no `sh -c` (adapters build argv directly); no hidden API calls (only starts local CLIs); no login handling (authenticate each agent separately); agent-specific behavior stays in its module; provider/model transforms stay centralized in `model.rs`; secrets use the SDK's stdin transport rather than argv; `--dry-run` redacts secret-looking environment values.
 
 ### Adding an agent
 
@@ -610,7 +695,7 @@ impl Harness for ExampleHarness {
 
 Working infrastructure for local automation.
 
-**Done:** dependency-free Rust CLI · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run command preview · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · panel fusion (`par fuse` + mcp `fuse` tool) · captured-run watchdog · mcp on/off/status · stdio MCP server · validating setup script · prebuilt release binaries for Linux/macOS/Windows via GitHub Actions (`par-<target>.tar.gz` / `.zip` + `.sha256`).
+**Done:** dependency-free Rust CLI/library · versioned JSONL runtime protocol · typed TypeScript SDK with streaming/cancellation/timeouts/env isolation · shared `claude -p`-style prompt surface · isolated per-agent adapters · agent installers · provider/model resolution · dry-run command preview · cross-agent session resume · agent-to-agent calls with context bridging · multi-turn two-agent conversations · panel fusion (`par fuse` + mcp `fuse` tool) · captured-run watchdog · mcp on/off/status · stdio MCP server · validating setup script · prebuilt release binaries for Linux/macOS/Windows via GitHub Actions (`par-<target>.tar.gz` / `.zip` + `.sha256`).
 
 **Not yet:** Homebrew formula · end-to-end smoke tests against every vendor CLI · a stable semver contract per agent mapping.
 
@@ -630,7 +715,7 @@ A Homebrew tap can follow once artifact names are stable.
 
 ## Security & privacy
 
-`par` does not inspect or redact prompt content. Anything passed via stdin or `-p` is forwarded to the selected agent, which may send it to its configured provider. `par` itself makes no network calls and keeps no logs — it only starts the local agent CLIs you already have.
+`par` does not inspect or redact prompt content. Anything passed via stdin or `-p` is forwarded to the selected agent, which may send it to its configured provider. `par` itself makes no network calls and keeps no logs — it only starts the local agent CLIs you already have. SDK prompts and environment values travel over stdin and are not echoed in protocol events; final output tails remain in caller memory. A downstream agent can still print a secret, so treat its output as sensitive.
 
 **Yolo (permission bypass) is on by default** — each run adds the agent's bypass flag unless you pass `--no-yolo` or set `PARLEY_YOLO=false`. This favors hands-off automation over sandboxing; opt out for untrusted prompts or sensitive directories. Use `--dry-run` to validate automation that may include secrets before running it.
 

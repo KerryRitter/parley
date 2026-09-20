@@ -1,9 +1,11 @@
 use crate::convert::{ConvertOptions, ConvertTarget};
+use std::collections::BTreeMap;
+
 use crate::harness::{ShimCommand, ShimOptions};
 use crate::installer::{InstallOptions, InstallTarget, UpdateOptions, UpdateTarget};
 use crate::EnvDefaults;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CliOptions {
     pub harness: String,
     pub provider: Option<String>,
@@ -24,6 +26,40 @@ pub(crate) struct CliOptions {
     /// Continue a prior session headlessly: an id, or `latest`/`last` for the
     /// most recent in this directory. Maps to each agent's resume flag.
     pub resume_id: Option<String>,
+    /// Override the executable selected by the harness adapter.
+    pub executable: Option<String>,
+    /// Environment values applied after adapter-provided values.
+    pub env: BTreeMap<String, String>,
+    /// Variables to remove from the child after adapter defaults.
+    pub unset_env: Vec<String>,
+    /// Whether the child inherits the parent environment.
+    pub inherit_env: bool,
+}
+
+impl Default for CliOptions {
+    fn default() -> Self {
+        Self {
+            harness: String::new(),
+            provider: None,
+            model: None,
+            output_format: None,
+            input_format: None,
+            permission_mode: None,
+            max_turns: None,
+            agent: None,
+            cwd: None,
+            prompt: None,
+            passthrough: Vec::new(),
+            dry_run: false,
+            yolo: false,
+            session_id: None,
+            resume_id: None,
+            executable: None,
+            env: BTreeMap::new(),
+            unset_env: Vec::new(),
+            inherit_env: true,
+        }
+    }
 }
 
 /// Options for `par resume` — browse and resume sessions across harnesses,
@@ -275,6 +311,19 @@ where
             "--agent" => options.agent = Some(require_value(&mut args, "--agent")?),
             "--session-id" => options.session_id = Some(require_value(&mut args, "--session-id")?),
             "--resume-id" => options.resume_id = Some(require_value(&mut args, "--resume-id")?),
+            "--executable" => options.executable = Some(require_value(&mut args, "--executable")?),
+            "--env" => {
+                let assignment = require_value(&mut args, "--env")?;
+                let (key, value) = parse_env_assignment(&assignment)?;
+                options.env.insert(key, value);
+            }
+            "--unset-env" => {
+                let key = require_value(&mut args, "--unset-env")?;
+                validate_env_name(&key)?;
+                options.unset_env.push(key);
+            }
+            "--no-inherit-env" => options.inherit_env = false,
+            "--inherit-env" => options.inherit_env = true,
             _ if arg.starts_with("--prompt=") => {
                 options.prompt = Some(value_after_equals(&arg, "--prompt="));
             }
@@ -311,6 +360,19 @@ where
             _ if arg.starts_with("--resume-id=") => {
                 options.resume_id = Some(value_after_equals(&arg, "--resume-id="));
             }
+            _ if arg.starts_with("--executable=") => {
+                options.executable = Some(value_after_equals(&arg, "--executable="));
+            }
+            _ if arg.starts_with("--env=") => {
+                let assignment = value_after_equals(&arg, "--env=");
+                let (key, value) = parse_env_assignment(&assignment)?;
+                options.env.insert(key, value);
+            }
+            _ if arg.starts_with("--unset-env=") => {
+                let key = value_after_equals(&arg, "--unset-env=");
+                validate_env_name(&key)?;
+                options.unset_env.push(key);
+            }
             _ if arg.starts_with('-') => options.passthrough.push(arg),
             _ => {
                 options.prompt = Some(match options.prompt {
@@ -335,6 +397,7 @@ pub(crate) fn usage() -> &'static str {
   par shims install
   par install claude
   par install list
+  par sdk capabilities
 
 Options:
   --harness, -h <name>    claude, codex, cursor, gemini, goose, opencode, qwen, aider, amazon-q, copilot, kimi, antigravity, muse, pi
@@ -352,6 +415,10 @@ Options:
   --session-id <id>       Set a specific session id (claude); lets you resume it later
   --resume-id <id|latest> Continue a prior session headlessly for a warm prompt cache
                           (claude --resume, codex exec resume, gemini --resume; latest=most recent)
+  --executable <path>     Override the adapter's executable (for wrappers such as exo/qwenp)
+  --env <KEY=VALUE>       Set a child environment variable; repeatable
+  --unset-env <KEY>       Remove a child environment variable after adapter defaults; repeatable
+  --no-inherit-env        Start the child with a clean environment before applying --env
   --dry-run               Print the routed command as JSON
   --                      Pass remaining flags through to the target CLI
 
@@ -453,6 +520,21 @@ Environment defaults:
   PARLEY_TIMEOUT, PARLEY_IDLE_TIMEOUT   captured-run watchdog seconds (0 = off)
   (legacy AGENT_ROUTER_* names still work)
 "
+}
+
+fn parse_env_assignment(value: &str) -> Result<(String, String), String> {
+    let (key, value) = value
+        .split_once('=')
+        .ok_or_else(|| format!("--env expects KEY=VALUE, got {value}"))?;
+    validate_env_name(key)?;
+    Ok((key.to_string(), value.to_string()))
+}
+
+fn validate_env_name(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.contains('=') || value.contains('\0') {
+        return Err(format!("invalid environment variable name: {value:?}"));
+    }
+    Ok(())
 }
 
 fn parse_update_args<I>(args: std::iter::Peekable<I>) -> Result<CliAction, String>
@@ -1046,6 +1128,37 @@ mod tests {
         };
 
         assert_eq!(options.passthrough, vec!["--verbose"]);
+    }
+
+    #[test]
+    fn parses_runtime_environment_overrides() {
+        let action = parse_args(
+            [
+                "-h",
+                "co",
+                "-p",
+                "hello",
+                "--executable",
+                "exo-codex",
+                "--env",
+                "OPENAI_BASE_URL=http://127.0.0.1:52415/v1",
+                "--env=OPENAI_API_KEY=test-key",
+                "--unset-env",
+                "CODEX_HOME",
+                "--no-inherit-env",
+            ]
+            .map(String::from),
+            defaults(),
+        )
+        .unwrap();
+        let CliAction::Run(options) = action else {
+            panic!("expected run action");
+        };
+        assert_eq!(options.executable.as_deref(), Some("exo-codex"));
+        assert_eq!(options.env["OPENAI_BASE_URL"], "http://127.0.0.1:52415/v1");
+        assert_eq!(options.env["OPENAI_API_KEY"], "test-key");
+        assert_eq!(options.unset_env, vec!["CODEX_HOME"]);
+        assert!(!options.inherit_env);
     }
 
     #[test]

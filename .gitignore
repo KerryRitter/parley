@@ -1,4 +1,6 @@
 /target/
+sdk/typescript/node_modules/
+sdk/typescript/dist/
 *.log
 *.tmp
 agent-router

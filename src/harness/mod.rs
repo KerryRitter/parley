@@ -25,7 +25,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use crate::cli::CliOptions;
 use crate::model::{ModelFactory, ModelFormat};
-pub(crate) use invocation::Invocation;
+pub use invocation::Invocation;
 
 pub(crate) trait Harness {
     fn build(&self, request: &Request) -> Result<Invocation, String>;
@@ -48,6 +48,10 @@ pub(crate) struct Request {
     pub yolo: bool,
     pub session_id: Option<String>,
     pub resume_id: Option<String>,
+    pub executable: Option<String>,
+    pub env: std::collections::BTreeMap<String, String>,
+    pub unset_env: Vec<String>,
+    pub inherit_env: bool,
 }
 
 impl Request {
@@ -70,6 +74,10 @@ impl Request {
             yolo: options.yolo,
             session_id: options.session_id,
             resume_id: options.resume_id,
+            executable: options.executable,
+            env: options.env,
+            unset_env: options.unset_env,
+            inherit_env: options.inherit_env,
         })
     }
 }
@@ -238,6 +246,25 @@ impl HarnessFactory {
                     names.join(", ")
                 )
             })
+    }
+
+    pub(crate) fn build(&self, request: &Request) -> Result<Invocation, String> {
+        let harness = self.create(&request.harness)?;
+        let mut invocation = harness.build(request)?;
+        if let Some(executable) = &request.executable {
+            invocation.command = executable.clone();
+        }
+        if !request.inherit_env {
+            invocation = invocation.with_clean_env();
+        }
+        for key in &request.unset_env {
+            invocation.env.remove(key);
+            invocation = invocation.without_env(key.clone());
+        }
+        for (key, value) in &request.env {
+            invocation = invocation.with_env(key.clone(), value.clone());
+        }
+        Ok(invocation)
     }
 }
 
@@ -809,11 +836,32 @@ mod tests {
 
     fn build(options: CliOptions) -> Invocation {
         let request = Request::from_options(options, String::new()).unwrap();
-        HarnessFactory::default()
-            .create(&request.harness)
-            .unwrap()
-            .build(&request)
-            .unwrap()
+        HarnessFactory::default().build(&request).unwrap()
+    }
+
+    #[test]
+    fn factory_applies_executable_and_environment_overrides_last() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert(
+            "GOOSE_PROVIDER".to_string(),
+            "override-provider".to_string(),
+        );
+        env.insert("OPENAI_API_KEY".to_string(), "local-key".to_string());
+        let invocation = build(CliOptions {
+            harness: "goose".to_string(),
+            prompt: Some("hello".to_string()),
+            provider: Some("adapter-provider".to_string()),
+            executable: Some("exo-goose".to_string()),
+            env,
+            unset_env: vec!["GOOSE_MODEL".to_string()],
+            inherit_env: false,
+            ..CliOptions::default()
+        });
+        assert_eq!(invocation.command, "exo-goose");
+        assert_eq!(invocation.env["GOOSE_PROVIDER"], "override-provider");
+        assert_eq!(invocation.env["OPENAI_API_KEY"], "local-key");
+        assert_eq!(invocation.env_remove, vec!["GOOSE_MODEL"]);
+        assert!(invocation.clear_env);
     }
 
     #[test]

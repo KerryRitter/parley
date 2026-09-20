@@ -50,9 +50,9 @@ pub(crate) fn run_invocation_status(
     inherit_stdin: bool,
 ) -> Result<std::process::ExitStatus, String> {
     let mut command = Command::new(&invocation.command);
+    configure_environment(&mut command, &invocation);
     command
         .args(&invocation.args)
-        .envs(&invocation.env)
         .stdin(if inherit_stdin {
             Stdio::inherit()
         } else {
@@ -219,9 +219,9 @@ pub(crate) fn capture_invocation_timeout(
     let _exclusive = exclusive_guard(&invocation.command);
 
     let mut command = Command::new(&invocation.command);
+    configure_environment(&mut command, &invocation);
     command
         .args(&invocation.args)
-        .envs(&invocation.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -264,7 +264,9 @@ pub(crate) fn capture_invocation_timeout(
     drop(beat_tx);
 
     let started = Instant::now();
+    let mut last_activity = started;
     let mut timed_out = false;
+    let mut readers_closed = false;
     // Wait at idle granularity (or a short tick when only an overall bound is
     // set), reacting to output heartbeats and process exit.
     let tick = pick_tick(timeouts);
@@ -277,17 +279,24 @@ pub(crate) fn capture_invocation_timeout(
             timed_out = true;
             break;
         }
-        match beat_rx.recv_timeout(tick) {
-            Ok(()) => continue,
+        let beat = if readers_closed {
+            thread::sleep(tick);
+            Err(mpsc::RecvTimeoutError::Timeout)
+        } else {
+            beat_rx.recv_timeout(tick)
+        };
+        match beat {
+            Ok(()) => {
+                last_activity = Instant::now();
+                continue;
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                // Readers closed: output is complete, just reap the child.
-                let _ = child.wait();
-                break;
+                // A child can close its pipes and keep running. Keep the
+                // watchdog active instead of blocking indefinitely in wait().
+                readers_closed = true;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if !timeouts.idle.is_zero() && started.elapsed() >= timeouts.idle {
-                    // Approximation: no heartbeat within the idle window. Good
-                    // enough — a steadily-emitting child keeps resetting it.
+                if !timeouts.idle.is_zero() && last_activity.elapsed() >= timeouts.idle {
                     let _ = child.kill();
                     timed_out = true;
                     break;
@@ -314,6 +323,16 @@ pub(crate) fn capture_invocation_timeout(
         success,
         timed_out,
     })
+}
+
+fn configure_environment(command: &mut Command, invocation: &Invocation) {
+    if invocation.clear_env {
+        command.env_clear();
+    }
+    for key in &invocation.env_remove {
+        command.env_remove(key);
+    }
+    command.envs(&invocation.env);
 }
 
 /// How often the watchdog wakes to re-check budgets. Bounded so an overall-only
@@ -385,6 +404,21 @@ mod tests {
     }
 
     #[test]
+    fn timeout_survives_a_child_closing_both_output_pipes() {
+        let timeouts = Timeouts {
+            overall: Duration::from_secs(2),
+            idle: Duration::from_millis(200),
+        };
+        let out = capture_invocation_timeout(
+            inv("sh", &["-c", "exec 1>&- 2>&-; sleep 10"]),
+            None,
+            timeouts,
+        )
+        .unwrap();
+        assert!(out.timed_out);
+    }
+
+    #[test]
     fn completes_before_timeout() {
         let timeouts = Timeouts {
             overall: Duration::from_secs(5),
@@ -392,6 +426,26 @@ mod tests {
         };
         let out = capture_invocation_timeout(inv("printf", &["done"]), None, timeouts).unwrap();
         assert_eq!(out.stdout, "done");
+        assert!(out.success);
+        assert!(!out.timed_out);
+    }
+
+    #[test]
+    fn output_heartbeats_reset_the_idle_timeout() {
+        let timeouts = Timeouts {
+            overall: Duration::from_secs(3),
+            idle: Duration::from_millis(250),
+        };
+        let out = capture_invocation_timeout(
+            inv(
+                "sh",
+                &["-c", "printf a; sleep 0.15; printf b; sleep 0.15; printf c"],
+            ),
+            None,
+            timeouts,
+        )
+        .unwrap();
+        assert_eq!(out.stdout, "abc");
         assert!(out.success);
         assert!(!out.timed_out);
     }
